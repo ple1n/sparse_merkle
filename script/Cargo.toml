@@ -1,11 +1,11 @@
 [package]
 version = "0.1.0"
-name = "fibonacci-script"
+name = "smt-script"
 edition = "2021"
-default-run = "fibonacci"
+default-run = "smt"
 
 [[bin]]
-name = "fibonacci"
+name = "smt"
 path = "src/bin/main.rs"
 
 

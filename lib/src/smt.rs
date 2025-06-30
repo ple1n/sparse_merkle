@@ -45,6 +45,7 @@ use sha3_v0_10_8::Sha3_256;
 use std::{
     borrow::ToOwned,
     collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
     io::Read,
     marker::PhantomData,
     ops::{Add, AddAssign},
@@ -71,9 +72,7 @@ impl core::fmt::Display for MerkleError {
 
 impl std::error::Error for MerkleError {}
 
-pub trait FieldExt: Clone + Eq + Copy + ToOwned<Owned = Self> + Serialize {
-    fn zero() -> Self;
-}
+pub trait FieldExt: Clone + Eq + Copy + ToOwned<Owned = Self> + Serialize + Default {}
 pub trait FieldHasher<F, const W: usize> {
     fn hash(&self, nodes: [F; W]) -> Result<F>;
 }
@@ -84,19 +83,13 @@ pub trait FieldHasher<F, const W: usize> {
 /// Each pair is used to identify whether an incremental merkle root
 /// construction is valid at each intermediate step.
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Path<F: FieldExt, const N: usize>
-where
-    [(F, F); N]: DeserializeOwned + Serialize,
-{
+pub struct Path<F: FieldExt, const N: usize> {
     /// The path represented as a sequence of sibling pairs.
-    pub path: [(F, F); N],
+    pub path: heapless::Vec<(F, F), N>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Proof<F: FieldExt, const N: usize>
-where
-    [(F, F); N]: DeserializeOwned + Serialize,
-{
+pub struct Proof<F: FieldExt, const N: usize> {
     pub path: Path<F, N>,
     pub root: F,
     pub leaf: F,
@@ -146,30 +139,6 @@ where
 
         Ok(prev)
     }
-
-    // /// Given leaf data determine what the index of this leaf must be
-    // /// in the Merkle tree it belongs to.  Before doing so check that the leaf
-    // /// does indeed belong to a tree with the given `root_hash`
-    // pub fn get_index(&self, root_hash: &F, leaf: &F, hasher: &H) -> Result<usize, Error> {
-    //     if !self.check_membership(root_hash, leaf, hasher)? {
-    //         return Err(MerkleError::InvalidLeaf.into());
-    //     }
-
-    //     let mut prev = *leaf;
-    //     let mut index = 0usize;
-    //     let mut twopower = 1;
-    //     // Check levels between leaf level and root
-    //     for &(ref left_hash, ref right_hash) in &self.path {
-    //         // Check if the previous hash is for a left node or right node
-    //         if &prev != left_hash {
-    //             index += twopower;
-    //         }
-    //         twopower = twopower + twopower;
-    //         prev = hasher.hash([*left_hash, *right_hash])?;
-    //     }
-
-    //     Ok(index)
-    // }
 }
 
 /// The Sparse Merkle Tree struct.
@@ -181,15 +150,12 @@ pub struct SparseMerkleTree<F: FieldExt, H: FieldHasher<F, 2>, const N: usize> {
     /// A map from leaf indices to leaf data stored as field elements.
     pub tree: BTreeMap<u64, F>,
     /// An array of default hashes hashed with themselves `N` times.
-    empty_hashes: [F; N],
+    empty_hashes: heapless::Vec<F, N>,
     /// The phantom hasher type used to build the merkle tree.
     marker: PhantomData<H>,
 }
 
-impl<F: FieldExt, H: FieldHasher<F, 2>, const N: usize> SparseMerkleTree<F, H, N>
-where
-    [(F, F); N]: DeserializeOwned + Serialize,
-{
+impl<F: FieldExt, H: FieldHasher<F, 2>, const N: usize> SparseMerkleTree<F, H, N> {
     /// Takes a batch of field elements, inserts
     /// these hashes into the tree, and updates the merkle root.
     pub fn insert_batch(&mut self, leaves: &BTreeMap<u32, F>, hasher: &H) -> Result<(), Error> {
@@ -276,7 +242,7 @@ where
     /// a "proof" in the sense of "valid path in a Merkle tree", not a ZK
     /// argument.
     pub fn generate_membership_path(&self, index: u64) -> Path<F, N> {
-        let mut path = [(F::zero(), F::zero()); N];
+        let mut path = heapless::Vec::new();
 
         let tree_index = convert_index_to_last_level(index, N);
 
@@ -305,11 +271,119 @@ where
 
     pub fn generate_membership_proof(&self, index: u64) -> Proof<F, N> {
         let empty_hash = &self.empty_hashes[0];
+        let tree_index = convert_index_to_last_level(index, N);
+
         Proof {
             path: self.generate_membership_path(index),
             root: self.root(),
-            leaf: self.tree.get(&index).unwrap_or(empty_hash).to_owned(),
+            leaf: self.tree.get(&tree_index).unwrap_or(empty_hash).to_owned(),
         }
+    }
+
+    pub fn batch_prove(&self, leaves: &[u64]) -> PartialTree<F, N> {
+        let mut partial = PartialTree {
+            empty_hashes: self.empty_hashes.to_owned(),
+            root: self.root(),
+            ..Default::default()
+        };
+
+        for leaf in leaves {
+            partial.leaves.push(*leaf);
+
+            let tree_index = convert_index_to_last_level(*leaf, N);
+
+            // Iterate from the leaf up to the root, storing all intermediate hash values.
+            let mut current_node = tree_index;
+            let mut level = 0;
+
+            while !is_root(current_node) {
+                let sibling_node = sibling(current_node).unwrap();
+
+                let empty_hash = &self.empty_hashes[level];
+
+                let current = self.tree.get(&current_node).cloned().unwrap_or(*empty_hash);
+                let sibling = self.tree.get(&sibling_node).cloned().unwrap_or(*empty_hash);
+
+                if current != *empty_hash {
+                    partial.tree.insert(current_node, current);
+                }
+                if sibling != *empty_hash {
+                    partial.tree.insert(sibling_node, sibling);
+                }
+
+                current_node = parent(current_node).unwrap();
+                level += 1;
+            }
+        }
+
+        partial
+    }
+}
+
+// Partial tree
+// Turn Vec<Path> Into a partial tree. Verify tree.
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct PartialTree<F: FieldExt, const N: usize> {
+    pub tree: BTreeMap<u64, F>,
+    empty_hashes: heapless::Vec<F, N>,
+    /// as in map index. not tree index
+    pub leaves: Vec<u64>,
+    pub root: F,
+}
+
+impl<F: FieldExt + Debug, const N: usize> PartialTree<F, N> {
+    pub fn verify<H: FieldHasher<F, 2>>(&self, hasher: &H) -> anyhow::Result<()> where {
+        #[cfg(all(target_os = "zkvm", target_vendor = "succinct"))]
+        {
+            sp1_zkvm::io::commit(&self.root);
+            sp1_zkvm::io::commit(&self.leaves);
+        }
+        #[cfg(not(target_os = "zkvm"))]
+        {
+            println!(
+                "Tree proof, total elements {}, leaves {}",
+                self.tree.len(),
+                self.leaves.len()
+            )
+        }
+        let last_level_index: u64 = (1u64 << N) - 1;
+        let mut level_idxs: BTreeSet<u64> = BTreeSet::new();
+        for i in &self.leaves {
+            let true_index = last_level_index + *i;
+            let idx = parent(true_index);
+            if let Some(idx) = idx {
+                level_idxs.insert(idx);
+            } else {
+                bail!("parent not found");
+            }
+        }
+
+        for level in 0..(N - 1) {
+            let mut new_idxs: BTreeSet<u64> = BTreeSet::new();
+            let empty_hash_parent = self.empty_hashes[level + 1].clone();
+            let empty_hash = self.empty_hashes[level].clone();
+            // Each layer is only calculated once
+            for i in level_idxs {
+                let left_index = left_child(i);
+                let right_index = right_child(i);
+                let left = self.tree.get(&left_index).unwrap_or(&empty_hash);
+                let right = self.tree.get(&right_index).unwrap_or(&empty_hash);
+
+                let got = *self.tree.get(&i).unwrap_or(&empty_hash_parent);
+                let expected = hasher.hash([left.clone(), right.clone()])?;
+                assert!(expected == got);
+
+                let parent = match parent(i) {
+                    Some(i) => i,
+                    None => break,
+                };
+                new_idxs.insert(parent);
+            }
+            level_idxs = new_idxs;
+        }
+
+        Ok(())
     }
 }
 
@@ -322,13 +396,15 @@ where
 pub fn gen_empty_hashes<F: FieldExt, H: FieldHasher<F, 2>, const N: usize>(
     hasher: &H,
     mut default_leaf: F,
-) -> Result<[F; N], Error> {
-    let mut empty_hashes = [F::zero(); N];
-
-    for item in empty_hashes.iter_mut().take(N) {
-        *item = default_leaf;
+) -> Result<heapless::Vec<F, N>, Error> {
+    let mut empty_hashes = heapless::Vec::new();
+    let mut item;
+    for ix in 0..N {
+        item = default_leaf;
+        let _ = empty_hashes.push(item);
         default_leaf = hasher.hash([default_leaf, default_leaf])?;
     }
+    assert!(empty_hashes.len() == N);
 
     Ok(empty_hashes)
 }
@@ -397,11 +473,7 @@ fn parent(index: u64) -> Option<u64> {
 
 use sha3_v0_10_8::digest::Update;
 
-impl FieldExt for [u8; 32] {
-    fn zero() -> Self {
-        [0; 32]
-    }
-}
+impl FieldExt for [u8; 32] {}
 
 impl<const N: usize> FieldHasher<[u8; 32], N> for Sha3_256 {
     fn hash(&self, nodes: [[u8; 32]; N]) -> Result<[u8; 32]> {

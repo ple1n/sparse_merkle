@@ -10,7 +10,7 @@
 //! RUST_LOG=info cargo run --release -- --prove
 //! ```
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use alloy_sol_types::SolType;
 use clap::Parser;
@@ -67,14 +67,26 @@ fn main() -> anyhow::Result<()> {
     let client = ProverClient::from_env();
 
     // Setup the inputs.
+    let num_proofs = 100;
     let mut stdin = SP1Stdin::new();
     let mut tree_map: BTreeMap<u32, [u8; 32]> = BTreeMap::new();
-    let mut val = [0; 32];
-    val[2] = 3;
-    tree_map.insert(5, val);
+    for n in 0..num_proofs {
+        let mut val = [0; 32];
+        val[2] = n as u8;
+        if n % 2 == 0 {
+            tree_map.insert(n, val);
+        } else {
+            tree_map.remove(&n);
+        }
+    }
+
     let h = Sha3;
     let tree: SparseMerkleTree<[u8; 32], Sha3, 32> = SparseMerkleTree::new(&tree_map, &h, [0; 32])?;
-    let proof = tree.generate_membership_proof(2);
+
+    let leaves: Vec<u64> = (0..num_proofs as u64).collect();
+    let proof = tree.batch_prove(&leaves);
+    proof.verify(&Sha3).unwrap();
+
     stdin.write(&proof);
 
     if args.execute {
@@ -87,13 +99,16 @@ fn main() -> anyhow::Result<()> {
         // Setup the program for proving.
         let (pk, vk) = client.setup(ELF_NAME);
 
+        println!("Proving {}", num_proofs);
+        let tx = Instant::now();
         // Generate the proof
         let proof = client
             .prove(&pk, &stdin)
             .run()
             .expect("failed to generate proof");
-
-        println!("Successfully generated proof!");
+        let d = Instant::now() - tx;
+        let t = (d) / num_proofs;
+        println!("Successfully generated proof! {:?}, {:?}", d, t);
 
         // Verify the proof.
         client.verify(&proof, &vk).expect("failed to verify proof");
