@@ -15,8 +15,8 @@ use std::{collections::BTreeMap, time::Instant};
 use alloy_sol_types::SolType;
 use clap::Parser;
 use sha3::{digest::Update, Digest, Sha3_256};
-use smt::smt::{FieldHasher, SparseMerkleTree};
-use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
+use smt::smt::{FieldHasher, PartialTree, SparseMerkleTree};
+use sp1_sdk::{include_elf, HashableKey, ProverClient, SP1Stdin};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const ELF_NAME: &[u8] = include_elf!("smt-program");
@@ -67,7 +67,7 @@ fn main() -> anyhow::Result<()> {
     let client = ProverClient::from_env();
 
     // Setup the inputs.
-    let num_proofs = 100;
+    let num_proofs = 5;
     let mut stdin = SP1Stdin::new();
     let mut tree_map: BTreeMap<u32, [u8; 32]> = BTreeMap::new();
     for n in 0..num_proofs {
@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
     let tree: SparseMerkleTree<[u8; 32], Sha3, 32> = SparseMerkleTree::new(&tree_map, &h, [0; 32])?;
 
     let leaves: Vec<u64> = (0..num_proofs as u64).collect();
-    let proof = tree.batch_prove(&leaves);
+    let proof: PartialTree<[u8; 32], 32> = tree.batch_prove(&leaves);
     proof.verify(&Sha3).unwrap();
 
     stdin.write(&proof);
@@ -102,13 +102,18 @@ fn main() -> anyhow::Result<()> {
         println!("Proving {}", num_proofs);
         let tx = Instant::now();
         // Generate the proof
-        let proof = client
+        let mut proof = client
             .prove(&pk, &stdin)
             .run()
             .expect("failed to generate proof");
         let d = Instant::now() - tx;
         let t = (d) / num_proofs;
         println!("Successfully generated proof! {:?}, {:?}", d, t);
+
+        // let comm = proof.public_values.read::<[u8; 32]>();
+        // dbg!(&comm);
+        // let comm = proof.public_values.read::<Vec<u64>>();
+        // dbg!(&comm);
 
         // Verify the proof.
         client.verify(&proof, &vk).expect("failed to verify proof");
