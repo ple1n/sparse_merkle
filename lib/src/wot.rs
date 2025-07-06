@@ -19,6 +19,7 @@ use petgraph::visit;
 use petgraph::visit::IntoEdgesDirected;
 use petgraph::visit::IntoNeighborsDirected;
 use petgraph::visit::NodeRef;
+
 use sp1_zkvm::lib::{self, verify::verify_sp1_proof};
 
 /// Same as Node, but with some data hidden by ZKP
@@ -91,8 +92,8 @@ use petgraph::Graph;
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Node {
-    score: u32,
-    proof: NodeProof,
+    pub score: u32,
+    pub proof: Option<NodeProof>,
 }
 
 /// Computed weight as a fraction of total weight
@@ -100,9 +101,104 @@ pub struct Weight {
     fraction: u32,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct WeightRuntime {
-    fraction: u32,
+    pub fraction: u32,
+}
+
+#[cfg(feature = "notzk")]
+pub mod notzk {
+
+    use rand::{
+        distributions::uniform::{SampleBorrow, SampleUniform, UniformSampler},
+        Error, Rng,
+    };
+
+    use super::*;
+    impl SampleUniform for WeightRuntime {
+        type Sampler = WeightSampler;
+    }
+
+    pub struct WeightSampler {
+        low: WeightRuntime,
+        high: WeightRuntime,
+        include_high: bool,
+    }
+
+    impl UniformSampler for WeightSampler {
+        type X = WeightRuntime;
+
+        fn new<B1, B2>(low_b: B1, high_b: B2) -> Self
+        where
+            B1: SampleBorrow<Self::X> + Sized,
+            B2: SampleBorrow<Self::X> + Sized,
+        {
+            let low = low_b.borrow().to_owned();
+            let high = high_b.borrow().to_owned();
+            if low > high {
+                unreachable!()
+            }
+
+            WeightSampler {
+                low,
+                high,
+                include_high: false,
+            }
+        }
+
+        fn new_inclusive<B1, B2>(low_b: B1, high_b: B2) -> Self
+        where
+            B1: SampleBorrow<Self::X> + Sized,
+            B2: SampleBorrow<Self::X> + Sized,
+        {
+            let low = low_b.borrow().clone();
+            let high = high_b.borrow().clone();
+            if low > high {
+                unreachable!()
+            }
+
+            WeightSampler {
+                low,
+                high,
+                include_high: true,
+            }
+        }
+
+        fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
+            WeightRuntime {
+                fraction: rng.sample(if self.include_high {
+                    rand::distributions::Uniform::new_inclusive(
+                        self.low.fraction,
+                        self.high.fraction,
+                    )
+                } else {
+                    rand::distributions::Uniform::new(self.low.fraction, self.high.fraction)
+                }),
+            }
+        }
+
+        fn sample_single<R: rand::Rng + ?Sized, B1, B2>(low: B1, high: B2, rng: &mut R) -> Self::X
+        where
+            B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+            B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+        {
+            let uniform: Self = UniformSampler::new(low, high);
+            uniform.sample(rng)
+        }
+
+        fn sample_single_inclusive<R: rand::Rng + ?Sized, B1, B2>(
+            low: B1,
+            high: B2,
+            rng: &mut R,
+        ) -> Self::X
+        where
+            B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+            B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+        {
+            let uniform: Self = UniformSampler::new_inclusive(low, high);
+            uniform.sample(rng)
+        }
+    }
 }
 
 pub type GraphIx = petgraph::graph::DefaultIx;
@@ -139,7 +235,7 @@ pub fn compute<V: NodeVerify>(mut proving: ProofWeb, verify: V) {
                             continue;
                         }
                         let node = &proving.web[ix];
-                        verify.verify_node(&node.proof);
+                        verify.verify_node(node.proof.as_ref().unwrap());
 
                         let ixes: Vec<_> = proving
                             .web
@@ -227,7 +323,7 @@ pub fn construct<V: NodeVerify>(mut proving: ProofWeb, verify: V) -> ProofWeb {
                             continue;
                         }
                         let node = &proving.web[ix];
-                        verify.verify_node(&node.proof);
+                        verify.verify_node(node.proof.as_ref().unwrap());
 
                         let ixes: Vec<_> = proving
                             .web

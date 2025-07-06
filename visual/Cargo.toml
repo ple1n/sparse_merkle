@@ -1,0 +1,13 @@
+[package]
+name = "visual"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.31.1"
+egui = "0.31.1"
+egui_graphs = "0.25.1"
+petgraph = { workspace = true }
+smt = { version = "0.12.0", path = "../lib" }
+graphalgs = { workspace = true }
+rand = { workspace = true }

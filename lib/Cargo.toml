@@ -9,6 +9,8 @@ keywords = ["merkle-tree", "authenticated"]
 publish = true
 
 [features]
+notzk = ["dep:rand"]
+default = ["notzk"]
 
 [dependencies]
 anyhow = "1.0.38"
@@ -17,13 +19,14 @@ digest = "0.10"
 heapless = { version = "0.8.0", features = ["serde"] }
 itertools = { version = "0.10.0", default-features = false }
 ordermap = "0.5.8"
-petgraph = { version = "0.8.2", features = ["serde"] }
+petgraph = { workspace = true }
 serde = { version = "1.0.124", features = ["derive"] }
 sha3-v0-10-8 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-4.0.0" }
 sp1-zkvm = { version = "5.0.0", features = ["verify"] }
+rand = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex = { version = "0.4", features = ["serde"] }
-rand = { version = "0.8.3" }
+rand = { workspace = true }
 parking_lot = { version = "0.12.1" }
 serde_json = { version = "1.0.95" }
