@@ -1,19 +1,39 @@
+use std::default;
+
+use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
-use egui::Context;
+use egui::{Button, Context, Id};
 use egui_graphs::{
-    DefaultGraphView, Graph, GraphView, LayoutHierarchical, LayoutStateHierarchical,
+    DefaultGraphView, Graph, GraphView, LayoutForceDirected, LayoutHierarchical,
+    LayoutStateForceDirected, LayoutStateHierarchical, events::Event,
 };
-use petgraph::{Directed, stable_graph::StableGraph};
-use smt::wot::{self, Node, WeightRuntime};
+use petgraph::{Directed, graphmap, stable_graph::StableGraph, visit::IntoNodeReferences};
+use smt::wot::{self, EdgeRuntime, Node};
 
 pub struct BasicApp {
-    g: Graph<Node, WeightRuntime, Directed, u32>,
+    g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32>,
+    pick_root: bool,
+    pick_owned: bool,
+    rx: Receiver<Event>,
+    sx: Sender<Event>,
+}
+
+#[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
+pub struct VisualData {
+    selected: bool,
 }
 
 impl BasicApp {
     fn new(_: &CreationContext<'_>) -> Self {
         let g = gen_graph();
-        Self { g: Graph::from(&g) }
+        let (sx, rx) = crossbeam::channel::unbounded();
+        Self {
+            g: Graph::from(&g),
+            pick_owned: false,
+            pick_root: false,
+            sx,
+            rx,
+        }
     }
 }
 use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
@@ -37,8 +57,8 @@ impl App for BasicApp {
 
             ui.add(
                 &mut GraphView::<
-                    Node,
-                    WeightRuntime,
+                    Node<VisualData>,
+                    EdgeRuntime<VisualData>,
                     Directed,
                     u32,
                     _,
@@ -48,8 +68,24 @@ impl App for BasicApp {
                 >::new(&mut self.g)
                 .with_styles(style_settings)
                 .with_interactions(interaction_settings)
-                .with_navigations(navigation_settings),
+                .with_navigations(navigation_settings), // .with_events(&self.sx),
             );
+        });
+        // for ev in self.rx {
+        //     match ev {
+        //         Event::NodeSelect(node) => self.g[node],
+        //     }
+        // }
+        egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
+            ui.add_space(20.);
+            if ui.selectable_label(self.pick_root, "pick root").clicked() {
+                self.pick_root = true;
+                self.pick_owned = false;
+            }
+            if ui.selectable_label(self.pick_owned, "pick owned").clicked() {
+                self.pick_root = false;
+                self.pick_owned = true;
+            }
         });
     }
 }
@@ -63,7 +99,8 @@ fn main() {
     .unwrap();
 }
 
-fn gen_graph() -> StableGraph<wot::Node, WeightRuntime> {
+fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
+-> StableGraph<wot::Node<A>, EdgeRuntime<B>> {
     use graphalgs::generate::random_weighted_digraph;
     use rand::distributions::uniform::UniformSampler;
     use smt::wot::notzk::WeightSampler;
@@ -75,15 +112,23 @@ fn gen_graph() -> StableGraph<wot::Node, WeightRuntime> {
     let g = random_weighted_digraph(
         node_num,
         nedge,
-        WeightRuntime { fraction: 1 },
-        WeightRuntime { fraction: 100 },
+        EdgeRuntime {
+            fraction: 1,
+            data: B::default(),
+        },
+        EdgeRuntime {
+            fraction: 100,
+            data: B::default(),
+        },
     )
     .unwrap();
-    let mut sg: StableGraph<wot::Node, WeightRuntime> = StableGraph::new();
+    let mut sg: StableGraph<wot::Node<A>, EdgeRuntime<B>> = StableGraph::new();
+
     for _ix in 0..node_num {
         sg.add_node(wot::Node {
             score: 0,
             proof: None,
+            data: A::default(),
         });
     }
 
