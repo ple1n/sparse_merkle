@@ -91,19 +91,23 @@ pub struct OwnershipProofs {
 use petgraph::Graph;
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Node {
+pub struct Node<A> {
     pub score: u32,
     pub proof: Option<NodeProof>,
+    pub data: A,
 }
 
+pub type NodeBase = Node<()>;
+
 /// Computed weight as a fraction of total weight
-pub struct Weight {
+pub struct Edge {
     fraction: u32,
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct WeightRuntime {
+pub struct EdgeRuntime<A> {
     pub fraction: u32,
+    pub data: A,
 }
 
 #[cfg(feature = "notzk")]
@@ -115,18 +119,18 @@ pub mod notzk {
     };
 
     use super::*;
-    impl SampleUniform for WeightRuntime {
-        type Sampler = WeightSampler;
+    impl<A: Default + PartialOrd + Clone> SampleUniform for EdgeRuntime<A> {
+        type Sampler = WeightSampler<A>;
     }
 
-    pub struct WeightSampler {
-        low: WeightRuntime,
-        high: WeightRuntime,
+    pub struct WeightSampler<A> {
+        low: EdgeRuntime<A>,
+        high: EdgeRuntime<A>,
         include_high: bool,
     }
 
-    impl UniformSampler for WeightSampler {
-        type X = WeightRuntime;
+    impl<A: Default + PartialOrd + Clone> UniformSampler for WeightSampler<A> {
+        type X = EdgeRuntime<A>;
 
         fn new<B1, B2>(low_b: B1, high_b: B2) -> Self
         where
@@ -165,7 +169,7 @@ pub mod notzk {
         }
 
         fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
-            WeightRuntime {
+            EdgeRuntime {
                 fraction: rng.sample(if self.include_high {
                     rand::distributions::Uniform::new_inclusive(
                         self.low.fraction,
@@ -174,6 +178,7 @@ pub mod notzk {
                 } else {
                     rand::distributions::Uniform::new(self.low.fraction, self.high.fraction)
                 }),
+                data: Default::default(),
             }
         }
 
@@ -203,7 +208,7 @@ pub mod notzk {
 
 pub type GraphIx = petgraph::graph::DefaultIx;
 // pub type Web = Graph<Node, Weight, Directed, GraphIx>;
-pub type RuntimeWeb = StableGraph<Node, WeightRuntime, Directed, GraphIx>;
+pub type RuntimeWeb = StableGraph<NodeBase, EdgeRuntime<()>, Directed, GraphIx>;
 
 /// Runtime state. Therefore indexed as much as possible.
 pub struct ProofWeb {
@@ -270,10 +275,10 @@ pub struct MockVerify;
 
 impl NodeVerify for MockVerify {}
 
-pub type ConstructWeb = Graph<ConstructNode, WeightRuntime, Directed, GraphIx>;
-pub enum ConstructNode {
+pub type ConstructWeb<A> = Graph<ConstructNode<A>, EdgeRuntime<()>, Directed, GraphIx>;
+pub enum ConstructNode<A> {
     Root,
-    Actual(Node),
+    Actual(Node<A>),
 }
 
 #[derive(PartialEq, PartialOrd)]
