@@ -4,18 +4,21 @@ use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
 use egui::{Button, Context, Id};
 use egui_graphs::{
-    DefaultGraphView, Graph, GraphView, LayoutForceDirected, LayoutHierarchical,
+    DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForceDirected, LayoutHierarchical,
     LayoutStateForceDirected, LayoutStateHierarchical, events::Event,
 };
-use petgraph::{Directed, graphmap, stable_graph::StableGraph, visit::IntoNodeReferences};
+use petgraph::{
+    Directed, graph::NodeIndex, graphmap, stable_graph::StableGraph, visit::IntoNodeReferences,
+};
 use smt::wot::{self, EdgeRuntime, Node};
 
 pub struct BasicApp {
-    g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32>,
+    g: Option<Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape>>,
     pick_root: bool,
     pick_owned: bool,
     rx: Receiver<Event>,
     sx: Sender<Event>,
+    reset: bool,
 }
 
 #[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
@@ -26,20 +29,45 @@ pub struct VisualData {
 impl BasicApp {
     fn new(_: &CreationContext<'_>) -> Self {
         let g = gen_graph();
+        println!("gen new graph {}", g.node_count());
+        let g = Graph::from(&g);
         let (sx, rx) = crossbeam::channel::unbounded();
         Self {
-            g: Graph::from(&g),
+            g: Some(g),
             pick_owned: false,
             pick_root: false,
             sx,
             rx,
+            reset: false,
         }
     }
 }
 use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
 
+use crate::node::NodeShape;
+
 impl App for BasicApp {
-    fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &Context, f: &mut eframe::Frame) {
+        egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
+            ui.add_space(20.);
+            if ui.selectable_label(self.pick_root, "pick root").clicked() {
+                self.pick_root = true;
+                self.pick_owned = false;
+            }
+            if ui.selectable_label(self.pick_owned, "pick owned").clicked() {
+                self.pick_root = false;
+                self.pick_owned = true;
+            }
+            ui.add_space(20.);
+
+            if ui.button("randomize").clicked() {
+                let g = gen_graph();
+                println!("gen new graph {}", g.node_count());
+                let g = Graph::from(&g);
+                self.reset = true;
+                self.g = Some(g);
+            }
+        });
         egui::CentralPanel::default().show(ctx, |ui| {
             let interaction_settings = &SettingsInteraction::new()
                 .with_dragging_enabled(true)
@@ -55,38 +83,45 @@ impl App for BasicApp {
                 .with_zoom_and_pan_enabled(true)
                 .with_zoom_speed(0.04);
 
-            ui.add(
-                &mut GraphView::<
+            if let Some(g) = &mut self.g {
+                if self.reset {
+                    ui.data_mut(|data| {
+                        data.clear();
+                    });
+                    self.reset = false;
+                }
+                let mut gv = GraphView::<
                     Node<VisualData>,
                     EdgeRuntime<VisualData>,
                     Directed,
                     u32,
-                    _,
+                    NodeShape,
                     _,
                     LayoutStateHierarchical,
                     LayoutHierarchical,
-                >::new(&mut self.g)
+                >::new(g)
                 .with_styles(style_settings)
                 .with_interactions(interaction_settings)
-                .with_navigations(navigation_settings), // .with_events(&self.sx),
-            );
+                .with_navigations(navigation_settings);
+
+                ui.add(&mut gv);
+            };
         });
-        // for ev in self.rx {
-        //     match ev {
-        //         Event::NodeSelect(node) => self.g[node],
-        //     }
-        // }
-        egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
-            ui.add_space(20.);
-            if ui.selectable_label(self.pick_root, "pick root").clicked() {
-                self.pick_root = true;
-                self.pick_owned = false;
+        if let Some(g) = &mut self.g {
+            loop {
+                if let Ok(ev) = self.rx.try_recv() {
+                    match ev {
+                        Event::NodeSelect(node) => {
+                            let n = g.node_mut(NodeIndex::new(node.id)).unwrap();
+                            n.payload_mut().data.selected = true;
+                        }
+                        _ => (),
+                    }
+                } else {
+                    break;
+                }
             }
-            if ui.selectable_label(self.pick_owned, "pick owned").clicked() {
-                self.pick_root = false;
-                self.pick_owned = true;
-            }
-        });
+        }
     }
 }
 
@@ -107,7 +142,7 @@ fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
 
     let node_num = 30;
     let nedge = (1.5 * node_num as f32) as usize;
-    println!("{} {}", node_num, nedge);
+    println!("node {} edge {}", node_num, nedge);
 
     let g = random_weighted_digraph(
         node_num,
@@ -140,3 +175,5 @@ fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
 
     sg
 }
+
+mod node;
