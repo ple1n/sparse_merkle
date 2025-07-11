@@ -1,12 +1,19 @@
+#![allow(clippy::while_let_loop)]
+#![allow(clippy::single_match)]
+#![allow(unused)]
+#![allow(clippy::type_complexity)]
+
 use std::default;
 
 use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
-use egui::{Button, Context, Id};
+use egui::{Button, Context, Id, emath};
 use egui_graphs::{
     DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForceDirected, LayoutHierarchical,
-    LayoutStateForceDirected, LayoutStateHierarchical, events::Event,
+    LayoutRandom, LayoutStateForceDirected, LayoutStateHierarchical, LayoutStateRandom, empty,
+    events::Event,
 };
+use fdg::{Force, ForceGraph, fruchterman_reingold::FruchtermanReingold, simple::Center};
 use petgraph::{
     Directed, graph::NodeIndex, graphmap, stable_graph::StableGraph, visit::IntoNodeReferences,
 };
@@ -21,6 +28,9 @@ pub struct BasicApp {
     reset: bool,
 }
 
+type LayoutState = empty::State;
+type Layout = empty::Layouter;
+
 #[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
 pub struct VisualData {
     selected: bool,
@@ -28,12 +38,9 @@ pub struct VisualData {
 
 impl BasicApp {
     fn new(_: &CreationContext<'_>) -> Self {
-        let g = gen_graph();
-        println!("gen new graph {}", g.node_count());
-        let g = Graph::from(&g);
         let (sx, rx) = crossbeam::channel::unbounded();
         Self {
-            g: Some(g),
+            g: Some(rand_view()),
             pick_owned: false,
             pick_root: false,
             sx,
@@ -41,6 +48,21 @@ impl BasicApp {
             reset: false,
         }
     }
+}
+
+pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> {
+    let sg = gen_graph();
+    println!("gen new graph {}", sg.node_count());
+    let mut g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> =
+        Graph::from(&sg);
+    let mut fg: ForceGraph<f32, 2, _, _> = fdg::init_force_graph_uniform(sg, 500.0);
+    FruchtermanReingold::default().apply_many(&mut fg, 100);
+    Center.apply(&mut fg);
+    for (ni, (n, p)) in fg.node_references() {
+        let pos = emath::pos2(p.x, p.y);
+        g.node_mut(ni).unwrap().set_location(pos);
+    }
+    g
 }
 use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
 
@@ -61,9 +83,7 @@ impl App for BasicApp {
             ui.add_space(20.);
 
             if ui.button("randomize").clicked() {
-                let g = gen_graph();
-                println!("gen new graph {}", g.node_count());
-                let g = Graph::from(&g);
+                let g = rand_view();
                 self.reset = true;
                 self.g = Some(g);
             }
@@ -97,8 +117,8 @@ impl App for BasicApp {
                     u32,
                     NodeShape,
                     _,
-                    LayoutStateHierarchical,
-                    LayoutHierarchical,
+                    LayoutState,
+                    Layout,
                 >::new(g)
                 .with_styles(style_settings)
                 .with_interactions(interaction_settings)

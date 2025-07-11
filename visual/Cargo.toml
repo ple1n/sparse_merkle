@@ -13,3 +13,4 @@ smt = { version = "0.12.0", path = "../lib" }
 graphalgs = { workspace = true }
 rand = { workspace = true }
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel"] }
+fdg = { git = "https://github.com/ple1n/fdg", version = "1.0.0" }
