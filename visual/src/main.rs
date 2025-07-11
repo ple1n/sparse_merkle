@@ -23,14 +23,18 @@ use petgraph::{
 };
 use smt::wot::{self, EdgeRuntime, Node};
 
-pub struct BasicApp {
+pub struct AppZK {
     g: Option<Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape>>,
     pick_root: bool,
     pick_owned: bool,
     rx: Receiver<Event>,
     sx: Sender<Event>,
     reset: bool,
+    root_nodes: BTreeSet<NI>,
+    owned_nodes: BTreeSet<NI>,
 }
+
+type NI = NodeIndex<u32>;
 
 type LayoutState = LayoutForce;
 type Layout = LayoutForce;
@@ -43,7 +47,7 @@ pub struct VisualData {
     virt: bool,
 }
 
-impl BasicApp {
+impl AppZK {
     fn new(_: &CreationContext<'_>) -> Self {
         let (sx, rx) = crossbeam::channel::unbounded();
         Self {
@@ -53,6 +57,8 @@ impl BasicApp {
             sx,
             rx,
             reset: false,
+            owned_nodes: Default::default(),
+            root_nodes: Default::default(),
         }
     }
 }
@@ -109,7 +115,7 @@ use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
 
 use crate::node::NodeShape;
 
-impl App for BasicApp {
+impl App for AppZK {
     fn update(&mut self, ctx: &Context, f: &mut eframe::Frame) {
         ctx.options_mut(|op| op.scroll_zoom_speed = 10.);
         egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
@@ -178,13 +184,27 @@ impl App for BasicApp {
                 if let Ok(ev) = self.rx.try_recv() {
                     match ev {
                         Event::NodeSelect(node) => {
-                            let (n, p) = g.node_mut(NodeIndex::new(node.id)).unwrap();
+                            let ni = NodeIndex::new(node.id);
+                            let (n, p) = g.node_mut(ni).unwrap();
+                            let mut mark = |map: &mut BTreeSet<NI>, var: &mut bool| {
+                                *var = !*var;
+                                if *var {
+                                    map.insert(ni);
+                                } else {
+                                    map.remove(&ni);
+                                }
+                                dbg!(&map);
+                            };
                             if self.pick_root {
-                                n.payload_mut().data.mark_root = !n.payload_mut().data.mark_root;
+                                let p = &mut n.payload_mut().data.mark_root;
+                                mark(&mut self.root_nodes, p);
                             }
                             if self.pick_owned {
-                                n.payload_mut().data.mark_owned = !n.payload_mut().data.mark_owned;
+                                let p = &mut n.payload_mut().data.mark_owned;
+                                mark(&mut self.owned_nodes, p);
                             }
+
+                            use smt::wot::construct;
                         }
                         _ => {
                             // dbg!(&ev);
@@ -202,7 +222,7 @@ fn main() {
     run_native(
         "egui_graphs_basic_demo",
         NativeOptions::default(),
-        Box::new(|cc| Ok(Box::new(BasicApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(AppZK::new(cc)))),
     )
     .unwrap();
 }

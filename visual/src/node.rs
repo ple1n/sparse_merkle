@@ -83,7 +83,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
         }
 
         if self.data.mark_owned {
-            color = color.blend(Color32::DARK_GREEN.gamma_multiply(0.6))
+            color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.6))
         }
 
         if self.hidden {
