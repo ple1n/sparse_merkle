@@ -3,19 +3,23 @@
 #![allow(unused)]
 #![allow(clippy::type_complexity)]
 
-use std::default;
+use std::{collections::BTreeSet, default};
 
 use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
 use egui::{Button, Context, Id, emath};
 use egui_graphs::{
-    DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForceDirected, LayoutHierarchical,
-    LayoutRandom, LayoutStateForceDirected, LayoutStateHierarchical, LayoutStateRandom, empty,
-    events::Event,
+    DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForce, events::Event, new_from_raw,
+    to_graph_custom,
 };
-use fdg::{Force, ForceGraph, fruchterman_reingold::FruchtermanReingold, simple::Center};
+use fdg::{
+    Force, ForceGraph,
+    fruchterman_reingold::{FruchtermanReingold, FruchtermanReingoldConfiguration},
+    simple::Center,
+};
 use petgraph::{
-    Directed, graph::NodeIndex, graphmap, stable_graph::StableGraph, visit::IntoNodeReferences,
+    Directed, algo::min_spanning_tree, graph::NodeIndex, graphmap, stable_graph::StableGraph,
+    visit::IntoNodeReferences,
 };
 use smt::wot::{self, EdgeRuntime, Node};
 
@@ -28,12 +32,14 @@ pub struct BasicApp {
     reset: bool,
 }
 
-type LayoutState = empty::State;
-type Layout = empty::Layouter;
+type LayoutState = LayoutForce;
+type Layout = LayoutForce;
 
 #[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
 pub struct VisualData {
     selected: bool,
+    /// Virtual node, for GUI purpose
+    virt: bool,
 }
 
 impl BasicApp {
@@ -51,17 +57,47 @@ impl BasicApp {
 }
 
 pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> {
-    let sg = gen_graph();
+    let mut sg: StableGraph<Node<VisualData>, EdgeRuntime<VisualData>> = gen_graph();
     println!("gen new graph {}", sg.node_count());
-    let mut g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> =
-        Graph::from(&sg);
-    let mut fg: ForceGraph<f32, 2, _, _> = fdg::init_force_graph_uniform(sg, 500.0);
-    FruchtermanReingold::default().apply_many(&mut fg, 100);
-    Center.apply(&mut fg);
-    for (ni, (n, p)) in fg.node_references() {
-        let pos = emath::pos2(p.x, p.y);
-        g.node_mut(ni).unwrap().set_location(pos);
+    let mut islands = BTreeSet::new();
+    for (ni, no) in sg.node_references() {
+        if sg.edges(ni).count() == 0 {
+            islands.insert(ni);
+        }
     }
+    let rt = sg.add_node(Node {
+        score: 0,
+        proof: None,
+        data: VisualData {
+            selected: false,
+            virt: true,
+        },
+    });
+    for n in islands {
+        sg.add_edge(
+            rt,
+            n,
+            EdgeRuntime {
+                fraction: 0,
+                data: VisualData {
+                    selected: false,
+                    virt: true,
+                },
+            },
+        );
+    }
+    let g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> =
+        new_from_raw(
+            &sg,
+            &mut |n: &mut _| {
+                if n.payload().data.virt {
+                    n.props.hidden = true
+                }
+            },
+            &mut |e: &mut _| {},
+        );
+
+    println!("num {} {}", g.node_count(), g.edge_count());
     g
 }
 use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
@@ -132,7 +168,7 @@ impl App for BasicApp {
                 if let Ok(ev) = self.rx.try_recv() {
                     match ev {
                         Event::NodeSelect(node) => {
-                            let n = g.node_mut(NodeIndex::new(node.id)).unwrap();
+                            let (n, p) = g.node_mut(NodeIndex::new(node.id)).unwrap();
                             n.payload_mut().data.selected = true;
                         }
                         _ => (),

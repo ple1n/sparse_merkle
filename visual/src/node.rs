@@ -24,6 +24,7 @@ pub struct NodeShape {
 
     /// Shape dependent property
     pub radius: f32,
+    pub hidden: bool,
 }
 
 impl<N: Clone> From<NodeProps<N>> for NodeShape {
@@ -34,7 +35,7 @@ impl<N: Clone> From<NodeProps<N>> for NodeShape {
             dragged: node_props.dragged,
             label_text: node_props.label.to_string(),
             color: node_props.color(),
-
+            hidden: node_props.hidden,
             radius: 5.0,
         }
     }
@@ -56,6 +57,10 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
     fn shapes(&mut self, ctx: &DrawContext) -> Vec<Shape> {
         let mut res = Vec::with_capacity(2);
 
+        // if self.hidden {
+        //     return res;
+        // }
+
         let is_interacted = self.selected || self.dragged;
 
         let style = if is_interacted {
@@ -64,11 +69,15 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
             ctx.ctx.style().visuals.widgets.inactive
         };
 
-        let color = if let Some(c) = self.color {
+        let mut color = if let Some(c) = self.color {
             c
         } else {
             style.fg_stroke.color
         };
+
+        if self.hidden {
+            color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
+        }
 
         let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
         let circle_radius = ctx.meta.canvas_to_screen_size(self.radius);
@@ -111,6 +120,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
         self.dragged = state.dragged;
         self.label_text = state.label.to_string();
         self.color = state.color();
+        self.hidden = state.hidden;
     }
 }
 
