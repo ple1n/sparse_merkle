@@ -38,7 +38,7 @@ impl From<NodeProps<NV>> for NodeShape {
             color: node_props.color(),
             hidden: node_props.hidden,
             radius: 5.0,
-            data: node_props.payload.data,
+            data: node_props.payload.add,
             props: node_props,
         }
     }
@@ -57,7 +57,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
         closest_point_on_circle(self.pos, self.radius, dir)
     }
 
-    fn shapes(&mut self, ctx: &DrawContext) -> Vec<Shape> {
+    fn shapes(&mut self, ctx: &DrawContext, state: &NodeProps<NV>) -> Vec<Shape> {
         let mut res = Vec::with_capacity(2);
 
         // if self.hidden {
@@ -88,6 +88,10 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
 
         if self.hidden {
             color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
+        }
+
+        if state.payload.score == 0 {
+            color = color.gamma_multiply(0.4);
         }
 
         let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
@@ -136,7 +140,6 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
 
         res
     }
-    /// Remember to update this code
     fn update(&mut self, state: &NodeProps<NV>) {
         self.pos = state.location();
         self.selected = state.selected;
@@ -144,7 +147,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
         self.label_text = state.label.to_string();
         self.color = state.color();
         self.hidden = state.hidden;
-        self.data = state.payload.data;
+        self.data = state.payload.add;
         self.props = state.clone();
     }
 }

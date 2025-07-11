@@ -1,9 +1,11 @@
-#![allow(clippy::while_let_loop)]
-#![allow(clippy::single_match)]
+#![allow(clippy::style)]
 #![allow(unused)]
-#![allow(clippy::type_complexity)]
+#![allow(clippy::complexity)]
 
-use std::{collections::BTreeSet, default};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    default,
+};
 
 use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
@@ -18,8 +20,12 @@ use fdg::{
     simple::Center,
 };
 use petgraph::{
-    Directed, algo::min_spanning_tree, graph::NodeIndex, graphmap, stable_graph::StableGraph,
-    visit::IntoNodeReferences,
+    Directed,
+    algo::min_spanning_tree,
+    graph::NodeIndex,
+    graphmap,
+    stable_graph::StableGraph,
+    visit::{EdgeRef, IntoEdgeReferences, IntoEdgesDirected, IntoNodeReferences},
 };
 use smt::wot::{self, EdgeRuntime, Node};
 
@@ -34,6 +40,66 @@ pub struct AppZK {
     owned_nodes: BTreeSet<NI>,
 }
 
+impl AppZK {
+    pub fn clear_selection(&mut self) {
+        self.root_nodes.clear();
+        self.owned_nodes.clear();
+    }
+    pub fn compute(&mut self) {
+        println!("compute");
+        use smt::wot::*;
+        let mut rweb: StableGraph<Node<VisualData>, EdgeRuntime<VisualData>> =
+            RuntimeWeb::<VisualData>::new();
+        if let Some(g) = self.g.as_mut() {
+            let mut map = BTreeMap::new();
+            for (x, (n, p)) in g.g().node_references() {
+                let mut node = n.payload().to_owned();
+                node.add.ix = x.index() as u32;
+                let new = rweb.add_node(node);
+                map.insert(x, new);
+            }
+            for e in g.g().edge_references() {
+                rweb.add_edge(
+                    *map.get(&e.source()).unwrap(),
+                    *map.get(&e.target()).unwrap(),
+                    e.weight().payload().clone(),
+                );
+            }
+
+            let mut proving = ProofWeb::default();
+            proving.web = rweb;
+            proving.public.methods = Methods::Web {
+                roots: Default::default(),
+            };
+            let roots = match &mut proving.public.methods {
+                Methods::Web { roots } => roots,
+                _ => unreachable!(),
+            };
+
+            for (x, n) in proving.web.node_references() {
+                if n.add.mark_owned {
+                    proving.owned.insert(x.index() as u32, IdentityPub::Mock);
+                }
+                if n.add.mark_root {
+                    roots.insert(x.index() as u32, 100);
+                }
+            }
+            let pruned = construct(proving, MockVerify);
+            println!(
+                "pruned {} {}",
+                pruned.web.node_count(),
+                pruned.web.edge_count()
+            );
+            for (x, n) in pruned.web.node_references() {
+                *g.g_mut().node_weight_mut(x).unwrap().0.payload_mut() = n.clone();
+            }
+            for e in pruned.web.edge_references() {
+                *(g.edge_mut(e.id()).unwrap().payload_mut()) = e.weight().clone();
+            }
+        }
+    }
+}
+
 type NI = NodeIndex<u32>;
 
 type LayoutState = LayoutForce;
@@ -43,6 +109,8 @@ type Layout = LayoutForce;
 pub struct VisualData {
     mark_owned: bool,
     mark_root: bool,
+    /// Ix in GUI
+    ix: u32,
     /// Virtual node, for GUI purpose
     virt: bool,
 }
@@ -79,7 +147,7 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
     let rt = sg.add_node(Node {
         score: 0,
         proof: None,
-        data: VisualData {
+        add: VisualData {
             virt: true,
             ..Default::default()
         },
@@ -101,7 +169,7 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
         new_from_raw(
             &sg,
             &mut |n: &mut _| {
-                if n.payload().data.virt {
+                if n.payload().add.virt {
                     n.props.hidden = true
                 }
             },
@@ -134,6 +202,10 @@ impl App for AppZK {
                 let g = rand_view();
                 self.reset = true;
                 self.g = Some(g);
+                self.clear_selection();
+            }
+            if ui.button("eval").clicked() {
+                self.compute();
             }
             if let Some(g) = &self.g {
                 ui.label(format!("hovered {:?}", g.meta.hovered));
@@ -196,11 +268,11 @@ impl App for AppZK {
                                 dbg!(&map);
                             };
                             if self.pick_root {
-                                let p = &mut n.payload_mut().data.mark_root;
+                                let p = &mut n.payload_mut().add.mark_root;
                                 mark(&mut self.root_nodes, p);
                             }
                             if self.pick_owned {
-                                let p = &mut n.payload_mut().data.mark_owned;
+                                let p = &mut n.payload_mut().add.mark_owned;
                                 mark(&mut self.owned_nodes, p);
                             }
 
@@ -256,7 +328,7 @@ fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
         sg.add_node(wot::Node {
             score: 0,
             proof: None,
-            data: A::default(),
+            add: A::default(),
         });
     }
 

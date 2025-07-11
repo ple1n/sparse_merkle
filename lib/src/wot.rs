@@ -5,6 +5,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::default;
 use std::ops::Add;
 
 use ordermap::OrderMap;
@@ -29,15 +30,16 @@ pub struct NodeProof {
     proof: MultiProof,
 }
 
+#[derive(Default)]
 /// Only proofs conforming to the standard public value can be accepted
 /// Such a proof only commits once, with this struct.
 pub struct StandardPublicValue<NodeIx = MultiHash> {
     // Common parameters
-    nodes: BTreeMap<NodeIx, IdentityPub>,
-    attest: Vec<Attestation>,
+    pub nodes: BTreeMap<NodeIx, IdentityPub>,
+    pub attest: Vec<Attestation>,
     // output-specific public parameters
-    methods: Methods<NodeIx>,
-    output: Output,
+    pub methods: Methods<NodeIx>,
+    pub output: Output,
 }
 
 pub enum Methods<NodeIx = MultiHash> {
@@ -47,7 +49,17 @@ pub enum Methods<NodeIx = MultiHash> {
     Web { roots: BTreeMap<NodeIx, u32> },
 }
 
+impl<Ix> Default for Methods<Ix> {
+    fn default() -> Self {
+        Self::Web {
+            roots: Default::default(),
+        }
+    }
+}
+
+#[derive(Default)]
 pub enum Output {
+    #[default]
     Pending,
     Score(u32),
 }
@@ -64,18 +76,21 @@ pub enum IdentityPub {
     Publickey([u8; 32]),
     /// Representing identity as knowledge about a hash pre-image
     Hash([u8; 32]),
+    Mock,
 }
 
 pub enum MultiHash {
     Sha3_256([u8; 32]),
     /// For future use
     Poseidon,
+    Mock,
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum MultiProof {
     Signature(Vec<u8>),
     Hash(HashOwnership),
+    Mock,
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -84,6 +99,7 @@ pub enum HashOwnership {
     ZK { pre_image: [u32; 8] },
 }
 
+#[derive(Default)]
 pub struct OwnershipProofs {
     map: BTreeMap<IdentityPub, MultiProof>,
 }
@@ -94,7 +110,7 @@ use petgraph::Graph;
 pub struct Node<A> {
     pub score: u32,
     pub proof: Option<NodeProof>,
-    pub data: A,
+    pub add: A,
 }
 
 pub type NodeBase = Node<()>;
@@ -208,27 +224,28 @@ pub mod notzk {
 
 pub type GraphIx = petgraph::graph::DefaultIx;
 // pub type Web = Graph<Node, Weight, Directed, GraphIx>;
-pub type RuntimeWeb = StableGraph<NodeBase, EdgeRuntime<()>, Directed, GraphIx>;
+pub type RuntimeWeb<A> = StableGraph<Node<A>, EdgeRuntime<A>, Directed, GraphIx>;
 
+#[derive(Default)]
 /// Runtime state. Therefore indexed as much as possible.
-pub struct ProofWeb {
-    web: RuntimeWeb,
-    owned: BTreeMap<GraphIx, IdentityPub>,
-    proofs: OwnershipProofs,
-    public: StandardPublicValue<GraphIx>,
+pub struct ProofWeb<A> {
+    pub web: RuntimeWeb<A>,
+    pub owned: BTreeMap<GraphIx, IdentityPub>,
+    pub proofs: OwnershipProofs,
+    pub public: StandardPublicValue<GraphIx>,
 }
 
 use petgraph::prelude::*;
 use petgraph::visit::Walker;
 
 // Accepts a partial graph
-pub fn compute<V: NodeVerify>(mut proving: ProofWeb, verify: V) {
+pub fn compute<V: NodeVerify, A>(mut proving: ProofWeb<A>, verify: V) {
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
 
     match proving.public.methods {
-        Methods::Weighted { weight } => {
+        Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(ix);
                 proving.web[node].score = w;
@@ -295,11 +312,11 @@ impl Add for PathWeight {
     }
 }
 
-fn construct_search(p: &ProofWeb) {
+fn construct_search<A: Clone>(p: &ProofWeb<A>) {
     // executed outside zkvm
     // construct a web from usable materials
     // find an optimal partial graph for proving to maximize trust score
-    let mut con = ConstructWeb::new();
+    let mut con = ConstructWeb::<A>::new();
     for n in p.web.node_weights() {
         con.add_node(ConstructNode::Actual(n.to_owned()));
     }
@@ -310,13 +327,13 @@ fn construct_search(p: &ProofWeb) {
 }
 
 /// Traverses the full graph, and find relevant sub graph
-pub fn construct<V: NodeVerify>(mut proving: ProofWeb, verify: V) -> ProofWeb {
+pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -> ProofWeb<A> {
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
 
     match &mut proving.public.methods {
-        Methods::Weighted { weight } => {
+        Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(*ix);
                 proving.web[node].score = *w;
@@ -355,7 +372,7 @@ pub fn construct<V: NodeVerify>(mut proving: ProofWeb, verify: V) -> ProofWeb {
     }
 
     // Back track the paths
-    let mut prn = RuntimeWeb::new();
+    let mut prn = RuntimeWeb::<A>::new();
     for (ix, key) in &proving.owned {
         insert_max((*ix).into(), &mut proving.web, &mut prn);
     }
@@ -366,7 +383,11 @@ pub fn construct<V: NodeVerify>(mut proving: ProofWeb, verify: V) -> ProofWeb {
     }
 }
 
-pub fn insert_max(pointed: NodeIndex, proving: &mut RuntimeWeb, prn: &mut RuntimeWeb) {
+pub fn insert_max<A: Clone>(
+    pointed: NodeIndex,
+    proving: &mut RuntimeWeb<A>,
+    prn: &mut RuntimeWeb<A>,
+) {
     let src = proving.edges_directed(pointed, Direction::Incoming);
     let max = src.max_by_key(|k| k.weight().fraction);
     if let Some(e) = max {
