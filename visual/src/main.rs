@@ -37,7 +37,6 @@ type Layout = LayoutForce;
 
 #[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
 pub struct VisualData {
-    selected: bool,
     mark_owned: bool,
     mark_root: bool,
     /// Virtual node, for GUI purpose
@@ -75,7 +74,6 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
         score: 0,
         proof: None,
         data: VisualData {
-            selected: false,
             virt: true,
             ..Default::default()
         },
@@ -87,7 +85,6 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
             EdgeRuntime {
                 fraction: 0,
                 data: VisualData {
-                    selected: false,
                     virt: true,
                     ..Default::default()
                 },
@@ -114,6 +111,7 @@ use crate::node::NodeShape;
 
 impl App for BasicApp {
     fn update(&mut self, ctx: &Context, f: &mut eframe::Frame) {
+        ctx.options_mut(|op| op.scroll_zoom_speed = 10.);
         egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
             ui.add_space(20.);
             if ui.selectable_label(self.pick_root, "pick root").clicked() {
@@ -130,6 +128,9 @@ impl App for BasicApp {
                 let g = rand_view();
                 self.reset = true;
                 self.g = Some(g);
+            }
+            if let Some(g) = &self.g {
+                ui.label(format!("hovered {:?}", g.meta.hovered));
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -179,9 +180,11 @@ impl App for BasicApp {
                         Event::NodeSelect(node) => {
                             let (n, p) = g.node_mut(NodeIndex::new(node.id)).unwrap();
                             if self.pick_root {
-                                n.payload_mut().data.mark_root = true;
+                                n.payload_mut().data.mark_root = !n.payload_mut().data.mark_root;
                             }
-                            n.payload_mut().data.selected = true;
+                            if self.pick_owned {
+                                n.payload_mut().data.mark_owned = !n.payload_mut().data.mark_owned;
+                            }
                         }
                         _ => {
                             // dbg!(&ev);

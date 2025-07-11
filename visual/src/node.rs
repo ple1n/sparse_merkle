@@ -82,26 +82,34 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
             color = color.blend(Color32::ORANGE.gamma_multiply(0.9))
         }
 
+        if self.data.mark_owned {
+            color = color.blend(Color32::DARK_GREEN.gamma_multiply(0.6))
+        }
+
         if self.hidden {
             color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
         }
 
+        let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
+        let circle_radius = ctx.meta.canvas_to_screen_size(self.radius);
+        let mut st = Stroke::default();
         if let Some(ix) = ctx.meta.hovered {
             if let Some(i2) = self.props.index {
                 if ix == i2 {
-                    color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.5));
+                    // color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.5));
+                    st.width = 10.;
+                    st.color = Color32::WHITE.gamma_multiply(0.4);
                 }
             }
         }
 
-        let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
-        let circle_radius = ctx.meta.canvas_to_screen_size(self.radius);
         let circle_shape = CircleShape {
             center: circle_center,
             radius: circle_radius,
             fill: color,
-            stroke: Stroke::default(),
+            stroke: st,
         };
+
         res.push(circle_shape.into());
 
         let label_visible = ctx.style.labels_always || self.selected || self.dragged;
