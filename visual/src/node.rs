@@ -12,7 +12,7 @@ use crate::VisualData;
 /// This is the default node shape which is used to display nodes in the graph.
 ///
 /// You can use this implementation as an example for implementing your own custom node shapes.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct NodeShape {
     pub pos: Pos2,
 
@@ -22,13 +22,14 @@ pub struct NodeShape {
 
     pub label_text: String,
 
-    /// Shape dependent property
     pub radius: f32,
     pub hidden: bool,
+    pub data: VisualData,
+    pub props: NodeProps<NV>,
 }
 
-impl<N: Clone> From<NodeProps<N>> for NodeShape {
-    fn from(node_props: NodeProps<N>) -> Self {
+impl From<NodeProps<NV>> for NodeShape {
+    fn from(node_props: NodeProps<NV>) -> Self {
         NodeShape {
             pos: node_props.location(),
             selected: node_props.selected,
@@ -37,11 +38,13 @@ impl<N: Clone> From<NodeProps<N>> for NodeShape {
             color: node_props.color(),
             hidden: node_props.hidden,
             radius: 5.0,
+            data: node_props.payload.data,
+            props: node_props,
         }
     }
 }
 
-type N = wot::Node<VisualData>;
+type NV = wot::Node<VisualData>;
 
 impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E, Ty, Ix>
     for NodeShape
@@ -75,8 +78,20 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
             style.fg_stroke.color
         };
 
+        if self.data.mark_root {
+            color = color.blend(Color32::ORANGE.gamma_multiply(0.9))
+        }
+
         if self.hidden {
             color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
+        }
+
+        if let Some(ix) = ctx.meta.hovered {
+            if let Some(i2) = self.props.index {
+                if ix == i2 {
+                    color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.5));
+                }
+            }
         }
 
         let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
@@ -113,14 +128,16 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
 
         res
     }
-
-    fn update(&mut self, state: &NodeProps<N>) {
+    /// Remember to update this code
+    fn update(&mut self, state: &NodeProps<NV>) {
         self.pos = state.location();
         self.selected = state.selected;
         self.dragged = state.dragged;
         self.label_text = state.label.to_string();
         self.color = state.color();
         self.hidden = state.hidden;
+        self.data = state.payload.data;
+        self.props = state.clone();
     }
 }
 

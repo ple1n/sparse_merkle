@@ -38,6 +38,8 @@ type Layout = LayoutForce;
 #[derive(Debug, Default, Hash, PartialEq, PartialOrd, Eq, Ord, Clone, Copy)]
 pub struct VisualData {
     selected: bool,
+    mark_owned: bool,
+    mark_root: bool,
     /// Virtual node, for GUI purpose
     virt: bool,
 }
@@ -61,7 +63,11 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
     println!("gen new graph {}", sg.node_count());
     let mut islands = BTreeSet::new();
     for (ni, no) in sg.node_references() {
-        if sg.edges(ni).count() == 0 {
+        if sg
+            .neighbors_directed(ni, petgraph::Direction::Incoming)
+            .count()
+            == 0
+        {
             islands.insert(ni);
         }
     }
@@ -71,6 +77,7 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
         data: VisualData {
             selected: false,
             virt: true,
+            ..Default::default()
         },
     });
     for n in islands {
@@ -82,6 +89,7 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
                 data: VisualData {
                     selected: false,
                     virt: true,
+                    ..Default::default()
                 },
             },
         );
@@ -158,7 +166,8 @@ impl App for BasicApp {
                 >::new(g)
                 .with_styles(style_settings)
                 .with_interactions(interaction_settings)
-                .with_navigations(navigation_settings);
+                .with_navigations(navigation_settings)
+                .with_events(&self.sx);
 
                 ui.add(&mut gv);
             };
@@ -169,9 +178,14 @@ impl App for BasicApp {
                     match ev {
                         Event::NodeSelect(node) => {
                             let (n, p) = g.node_mut(NodeIndex::new(node.id)).unwrap();
+                            if self.pick_root {
+                                n.payload_mut().data.mark_root = true;
+                            }
                             n.payload_mut().data.selected = true;
                         }
-                        _ => (),
+                        _ => {
+                            // dbg!(&ev);
+                        }
                     }
                 } else {
                     break;
