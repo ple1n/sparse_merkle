@@ -389,7 +389,7 @@ pub fn construct<'b, N, E, V: NodeVerify>(
     }
 
     for (ix, key) in &proving.owned {
-        insert_max::<N, E>((*ix).into(), &mut proving.web.g, map);
+        insert_max::<N, E>((*ix).into(), proving.web.g, map);
     }
 }
 
@@ -408,6 +408,10 @@ pub fn insert_max<N, E>(
         let e: &EdgeRuntime = k.weight().into();
         e.fraction
     });
+    let node: &Node = (&proving[pointed] as &N).into();
+    if map.map_node(pointed, node) {
+        return;
+    }
     if let Some(e) = max {
         let node: &Node = (&proving[e.target()] as &N).into();
         map.map_node(e.target(), node);
@@ -422,6 +426,7 @@ pub struct GraphMapDefault;
 pub trait MapGraph {
     type IxN;
     type IxE;
+    /// True, if the node exists
     fn map_node(&mut self, node: Self::IxN, new: &Node) -> bool;
     fn map_edge(&mut self, edge: Self::IxE, new: &EdgeRuntime) -> bool;
 }
