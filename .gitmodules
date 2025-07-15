@@ -4,3 +4,6 @@
 [submodule "visual/fdg"]
 	path = visual/fdg
 	url = https://github.com/ple1n/fdg
+[submodule "mapgraph"]
+	path = mapgraph
+	url = https://gitlab.com/planetoryd/mapgraph

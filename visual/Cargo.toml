@@ -14,3 +14,4 @@ graphalgs = { workspace = true }
 rand = { workspace = true }
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel"] }
 fdg = { path = "./fdg", version = "1.0.0", features = ["serde"]}
+anyhow = "1.0.98"

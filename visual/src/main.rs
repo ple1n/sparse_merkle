@@ -3,6 +3,7 @@
 #![allow(clippy::complexity)]
 
 use std::{
+    any,
     collections::{BTreeMap, BTreeSet},
     default,
 };
@@ -45,27 +46,12 @@ impl AppZK {
         self.root_nodes.clear();
         self.owned_nodes.clear();
     }
-    pub fn compute(&mut self) {
+    pub fn compute(&mut self) -> Result<(), anyhow::Error> {
         println!("compute");
         use smt::wot::*;
-        let mut rweb: StableGraph<Node<VisualData>, EdgeRuntime<VisualData>> =
-            RuntimeWeb::<VisualData>::new();
+        let mut rweb = RuntimeWeb::<VisualData>::default();
         if let Some(g) = self.g.as_mut() {
-            let mut map = BTreeMap::new();
-            for (x, (n, p)) in g.g().node_references() {
-                let mut node = n.payload().to_owned();
-                node.add.ix = x.index() as u32;
-                let new = rweb.add_node(node);
-                map.insert(x, new);
-            }
-            for e in g.g().edge_references() {
-                rweb.add_edge(
-                    *map.get(&e.source()).unwrap(),
-                    *map.get(&e.target()).unwrap(),
-                    e.weight().payload().clone(),
-                );
-            }
-
+            let gx = g.g();
             let mut proving = ProofWeb::default();
             proving.web = rweb;
             proving.public.methods = Methods::Web {
@@ -76,27 +62,34 @@ impl AppZK {
                 _ => unreachable!(),
             };
 
-            for (x, n) in proving.web.node_references() {
+            for (x, n) in proving.web.node_weights() {
                 if n.add.mark_owned {
-                    proving.owned.insert(x.index() as u32, IdentityPub::Mock);
+                    proving.owned.insert(x, IdentityPub::Mock);
                 }
                 if n.add.mark_root {
-                    roots.insert(x.index() as u32, 100);
+                    roots.insert(x, 100);
                 }
             }
-            let pruned = construct(proving, MockVerify);
+            let mut pruned = construct(proving, MockVerify)?;
             println!(
                 "pruned {} {}",
-                pruned.web.node_count(),
-                pruned.web.edge_count()
+                pruned.web.nodes_count(),
+                pruned.web.edges_count()
             );
-            for (x, n) in pruned.web.node_references() {
-                *g.g_mut().node_weight_mut(x).unwrap().0.payload_mut() = n.clone();
+            for (x, n) in pruned.web.node_weights() {
+                *self
+                    .g
+                    .as_mut()
+                    .unwrap()
+                    .node_mut(x.into())
+                    .unwrap()
+                    .0
+                    .payload_mut() = n.clone();
             }
-            for e in pruned.web.edge_references() {
-                *(g.edge_mut(e.id()).unwrap().payload_mut()) = e.weight().clone();
-            }
+            let (nodes, edges) = pruned.web.as_nodes_and_edges_mut();
+            for (ei, e) in edges {}
         }
+        Ok(())
     }
 }
 
@@ -109,8 +102,6 @@ type Layout = LayoutForce;
 pub struct VisualData {
     mark_owned: bool,
     mark_root: bool,
-    /// Ix in GUI
-    ix: u32,
     /// Virtual node, for GUI purpose
     virt: bool,
 }
@@ -205,7 +196,8 @@ impl App for AppZK {
                 self.clear_selection();
             }
             if ui.button("eval").clicked() {
-                self.compute();
+                let x = self.compute();
+                println!("eval {:?}", x);
             }
             if let Some(g) = &self.g {
                 ui.label(format!("hovered {:?}", g.meta.hovered));

@@ -107,13 +107,10 @@ pub struct OwnershipProofs {
 use petgraph::Graph;
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Node<A> {
+pub struct Node {
     pub score: u32,
     pub proof: Option<NodeProof>,
-    pub add: A,
 }
-
-pub type NodeBase = Node<()>;
 
 /// Computed weight as a fraction of total weight
 pub struct Edge {
@@ -121,32 +118,30 @@ pub struct Edge {
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct EdgeRuntime<A> {
+pub struct EdgeRuntime {
     pub fraction: u32,
-    pub data: A,
 }
 
 #[cfg(feature = "notzk")]
 pub mod notzk {
-
     use rand::{
         distributions::uniform::{SampleBorrow, SampleUniform, UniformSampler},
         Error, Rng,
     };
 
     use super::*;
-    impl<A: Default + PartialOrd + Clone> SampleUniform for EdgeRuntime<A> {
-        type Sampler = WeightSampler<A>;
+    impl SampleUniform for EdgeRuntime {
+        type Sampler = WeightSampler;
     }
 
-    pub struct WeightSampler<A> {
-        low: EdgeRuntime<A>,
-        high: EdgeRuntime<A>,
+    pub struct WeightSampler {
+        low: EdgeRuntime,
+        high: EdgeRuntime,
         include_high: bool,
     }
 
-    impl<A: Default + PartialOrd + Clone> UniformSampler for WeightSampler<A> {
-        type X = EdgeRuntime<A>;
+    impl UniformSampler for WeightSampler {
+        type X = EdgeRuntime;
 
         fn new<B1, B2>(low_b: B1, high_b: B2) -> Self
         where
@@ -194,7 +189,6 @@ pub mod notzk {
                 } else {
                     rand::distributions::Uniform::new(self.low.fraction, self.high.fraction)
                 }),
-                data: Default::default(),
             }
         }
 
@@ -224,22 +218,42 @@ pub mod notzk {
 
 pub type GraphIx = petgraph::graph::DefaultIx;
 // pub type Web = Graph<Node, Weight, Directed, GraphIx>;
-pub type RuntimeWeb<A> = StableGraph<Node<A>, EdgeRuntime<A>, Directed, GraphIx>;
+pub type RuntimeWeb = StableGraph<Node, EdgeRuntime, Directed, GraphIx>;
 
-#[derive(Default)]
 /// Runtime state. Therefore indexed as much as possible.
-pub struct ProofWeb<A> {
-    pub web: RuntimeWeb<A>,
+pub struct ProofWeb<'b, N, E>
+where
+    for<'a> &'a mut Node: From<&'a mut N>,
+    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
+    for<'a> &'a Node: From<&'a N>,
+    for<'a> &'a EdgeRuntime: From<&'a E>,
+{
+    pub web: WrappedGraph<'b, N, E>,
     pub owned: BTreeMap<GraphIx, IdentityPub>,
     pub proofs: OwnershipProofs,
     pub public: StandardPublicValue<GraphIx>,
 }
 
+pub struct WrappedGraph<'b, N, E>
+where
+    for<'a> &'a mut Node: From<&'a mut N>,
+    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
+    for<'a> &'a Node: From<&'a N>,
+    for<'a> &'a EdgeRuntime: From<&'a E>,
+{
+    g: &'b mut StableGraph<N, E, Directed, GraphIx>,
+}
+
 use petgraph::prelude::*;
-use petgraph::visit::Walker;
 
 // Accepts a partial graph
-pub fn compute<V: NodeVerify, A>(mut proving: ProofWeb<A>, verify: V) {
+pub fn compute<'b, N, E, V: NodeVerify>(proving: ProofWeb<'b, N, E>, verify: V)
+where
+    for<'a> &'a mut Node: From<&'a mut N>,
+    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
+    for<'a> &'a Node: From<&'a N>,
+    for<'a> &'a EdgeRuntime: From<&'a E>,
+{
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
@@ -248,7 +262,8 @@ pub fn compute<V: NodeVerify, A>(mut proving: ProofWeb<A>, verify: V) {
         Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(ix);
-                proving.web[node].score = w;
+                let n: &mut Node = (&mut proving.web.g[node] as &mut N).into();
+                n.score = w;
             }
             loop {
                 if !this.is_empty() {
@@ -256,20 +271,23 @@ pub fn compute<V: NodeVerify, A>(mut proving: ProofWeb<A>, verify: V) {
                         if !visited.insert(ix) {
                             continue;
                         }
-                        let node = &proving.web[ix];
+                        let node: &Node = (&proving.web.g[ix]).into();
+                        let this_score = node.score;
                         verify.verify_node(node.proof.as_ref().unwrap());
-
                         let ixes: Vec<_> = proving
                             .web
+                            .g
                             .edges_directed(ix, Direction::Outgoing)
                             .map(|e| (e.id(), e.target()))
                             .collect();
                         let div = ixes.len() as u32;
-                        let this_score = node.score;
                         for (e, n) in ixes {
                             let add = this_score / div;
-                            proving.web[e].fraction = add;
-                            proving.web[n].score += add;
+                            let ex: &mut EdgeRuntime = (&mut proving.web.g[e] as &mut E).into();
+                            ex.fraction = add;
+
+                            let nn: &mut Node = (&mut proving.web.g[n] as &mut N).into();
+                            nn.score += add;
                             next.insert(n, ());
                         }
                     }
@@ -292,10 +310,10 @@ pub struct MockVerify;
 
 impl NodeVerify for MockVerify {}
 
-pub type ConstructWeb<A> = Graph<ConstructNode<A>, EdgeRuntime<()>, Directed, GraphIx>;
-pub enum ConstructNode<A> {
+pub type ConstructWeb = Graph<ConstructNode, EdgeRuntime, Directed, GraphIx>;
+pub enum ConstructNode {
     Root,
-    Actual(Node<A>),
+    Actual(Node),
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -312,22 +330,17 @@ impl Add for PathWeight {
     }
 }
 
-fn construct_search<A: Clone>(p: &ProofWeb<A>) {
-    // executed outside zkvm
-    // construct a web from usable materials
-    // find an optimal partial graph for proving to maximize trust score
-    let mut con = ConstructWeb::<A>::new();
-    for n in p.web.node_weights() {
-        con.add_node(ConstructNode::Actual(n.to_owned()));
-    }
-
-    // k_shortest_path
-
-    todo!()
-}
-
 /// Traverses the full graph, and find relevant sub graph
-pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -> ProofWeb<A> {
+pub fn construct<'b, N, E, V: NodeVerify>(
+    mut proving: ProofWeb<'b, N, E>,
+    verify: V,
+    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex>,
+) where
+    for<'a> &'a mut Node: From<&'a mut N>,
+    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
+    for<'a> &'a Node: From<&'a N>,
+    for<'a> &'a EdgeRuntime: From<&'a E>,
+{
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
@@ -336,7 +349,8 @@ pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -
         Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(*ix);
-                proving.web[node].score = *w;
+                let n: &mut Node = (&mut proving.web.g[node] as &mut N).into();
+                n.score = *w;
             }
             loop {
                 if !this.is_empty() {
@@ -344,11 +358,12 @@ pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -
                         if !visited.insert(ix) {
                             continue;
                         }
-                        let node = &proving.web[ix];
+                        let node: &Node = (&proving.web.g[ix]).into();
                         verify.verify_node(node.proof.as_ref().unwrap());
 
                         let ixes: Vec<_> = proving
                             .web
+                            .g
                             .edges_directed(ix, Direction::Outgoing)
                             .map(|e| (e.id(), e.target()))
                             .collect();
@@ -356,8 +371,10 @@ pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -
                         let this_score = node.score;
                         for (e, n) in ixes {
                             let add = this_score / div;
-                            proving.web[e].fraction = add;
-                            proving.web[n].score += add;
+                            let ex: &mut EdgeRuntime = (&mut proving.web.g[e] as &mut E).into();
+                            ex.fraction = add;
+                            let nn: &mut Node = (&mut proving.web.g[n] as &mut N).into();
+                            nn.score += add;
                             next.insert(n, ());
                         }
                     }
@@ -371,29 +388,40 @@ pub fn construct<V: NodeVerify, A: Clone>(mut proving: ProofWeb<A>, verify: V) -
         _ => unimplemented!(),
     }
 
-    // Back track the paths
-    let mut prn = RuntimeWeb::<A>::new();
     for (ix, key) in &proving.owned {
-        insert_max((*ix).into(), &mut proving.web, &mut prn);
-    }
-
-    ProofWeb {
-        web: prn,
-        ..proving
+        insert_max::<N, E>((*ix).into(), &mut proving.web.g, map);
     }
 }
 
-pub fn insert_max<A: Clone>(
+pub fn insert_max<N, E>(
     pointed: NodeIndex,
-    proving: &mut RuntimeWeb<A>,
-    prn: &mut RuntimeWeb<A>,
-) {
+    proving: &mut StableGraph<N, E, Directed, GraphIx>,
+    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex>,
+) where
+    for<'a> &'a mut Node: From<&'a mut N>,
+    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
+    for<'a> &'a Node: From<&'a N>,
+    for<'a> &'a EdgeRuntime: From<&'a E>,
+{
     let src = proving.edges_directed(pointed, Direction::Incoming);
-    let max = src.max_by_key(|k| k.weight().fraction);
+    let max = src.max_by_key(|k| {
+        let e: &EdgeRuntime = k.weight().into();
+        e.fraction
+    });
     if let Some(e) = max {
-        let node = proving[e.target()].clone();
-        prn[e.target()] = node;
-        prn[e.id()] = e.weight().to_owned();
-        insert_max(e.target(), proving, prn);
+        let node: &Node = (&proving[e.target()] as &N).into();
+        map.map_node(e.target(), node);
+        map.map_edge(e.id(), e.weight().into());
+        insert_max::<N, E>(e.target(), proving, map);
     }
+}
+
+pub struct GraphMapDefault;
+
+/// Represents a change to a graph
+pub trait MapGraph {
+    type IxN;
+    type IxE;
+    fn map_node(&mut self, node: Self::IxN, new: &Node) -> bool;
+    fn map_edge(&mut self, edge: Self::IxE, new: &EdgeRuntime) -> bool;
 }
