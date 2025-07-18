@@ -5,7 +5,7 @@ use egui::{
 use petgraph::{EdgeType, stable_graph::IndexType};
 use smt::wot;
 
-use egui_graphs::{DisplayNode, DrawContext, NodeProps};
+use egui_graphs::{DisplayNode, DrawContext, NodeProps, metadata::GraphElement};
 
 use crate::{VisualData, VisualNode};
 
@@ -13,7 +13,7 @@ use crate::{VisualData, VisualNode};
 ///
 /// You can use this implementation as an example for implementing your own custom node shapes.
 #[derive(Clone)]
-pub struct NodeShape {
+pub struct AppNodeShape {
     pub pos: Pos2,
 
     pub selected: bool,
@@ -27,9 +27,9 @@ pub struct NodeShape {
     pub props: NodeProps<NV>,
 }
 
-impl From<NodeProps<NV>> for NodeShape {
+impl From<NodeProps<NV>> for AppNodeShape {
     fn from(node_props: NodeProps<NV>) -> Self {
-        NodeShape {
+        AppNodeShape {
             pos: node_props.location(),
             selected: node_props.selected,
             dragged: node_props.dragged,
@@ -44,7 +44,7 @@ impl From<NodeProps<NV>> for NodeShape {
 
 type NV = VisualNode;
 
-impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for NodeShape {
+impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for AppNodeShape {
     fn is_inside(&self, pos: Pos2) -> bool {
         is_inside_circle(self.pos, self.radius, pos)
     }
@@ -77,23 +77,18 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for NodeS
         if self.props.payload.mark_root {
             color = color.blend(Color32::ORANGE.gamma_multiply(0.9))
         }
-
         if self.props.payload.mark_owned {
-            color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.6))
+            color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.9))
         }
 
         if self.hidden {
-            color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
-        }
-
-        if state.payload.node.score == 0 {
-            color = color.gamma_multiply(0.4);
+            color = color.blend(Color32::WHITE.gamma_multiply(0.1));
         }
 
         let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
         let circle_radius = ctx.meta.canvas_to_screen_size(self.radius);
         let mut st = Stroke::default();
-        if let Some(ix) = ctx.meta.hovered {
+        if let Some(GraphElement::Node(ix)) = ctx.meta.hovered {
             if let Some(i2) = self.props.index {
                 if ix == i2 {
                     // color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.5));
@@ -112,7 +107,13 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for NodeS
 
         res.push(circle_shape.into());
 
-        let label_visible = ctx.style.labels_always || self.selected || self.dragged;
+        let mut label_visible = ctx.style.labels_always || self.selected || self.dragged;
+
+        if state.payload.mapped {
+            label_visible = true;
+            self.label_text = format!("{}", state.payload.node.score);
+        }
+
         if !label_visible {
             return res;
         }

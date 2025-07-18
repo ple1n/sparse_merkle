@@ -15,8 +15,10 @@ use egui_graphs::{
     DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForce,
     events::Event,
     graph::{FEdge, FNode, ForceGraphType},
+    metadata::GraphElement,
     new_from_raw, to_graph_custom,
 };
+use egui_json_tree::JsonTree;
 use fdg::{
     Force, ForceGraph,
     fruchterman_reingold::{FruchtermanReingold, FruchtermanReingoldConfiguration},
@@ -31,12 +33,15 @@ use petgraph::{
     stable_graph::StableGraph,
     visit::{EdgeRef, IntoEdgeReferences, IntoEdgesDirected, IntoNodeReferences},
 };
+use rand::prelude::Distribution;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use smt::{
     smt::Proof,
     wot::{self, Conv, EdgeRuntime, MapGraph, Node},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VisualNode {
     node: Node,
     mark_root: bool,
@@ -44,7 +49,7 @@ pub struct VisualNode {
     mapped: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct VisualEdge {
     edge: EdgeRuntime,
     mapped: bool,
@@ -79,11 +84,13 @@ impl MapGraph for VisualGrapher {
     type IxN = NodeIndex;
     type S = TyGraph;
     fn map_node(&mut self, sg: &mut Self::S, node: Self::IxN, new: Option<Node>) -> bool {
+        println!("map {:?}", node);
         let is = sg[node].0.payload_mut().mapped;
         sg[node].0.payload_mut().mapped = true;
         is
     }
     fn map_edge(&mut self, sg: &mut Self::S, edge: Self::IxE, new: Option<EdgeRuntime>) -> bool {
+        println!("map {:?}", edge);
         let is = sg[edge].payload_mut().mapped;
         sg[edge].payload_mut().mapped = true;
         is
@@ -94,8 +101,9 @@ impl MapGraph for VisualGrapher {
 pub struct VisualConv;
 
 impl Conv for VisualConv {
-    type Edge = FEdge<VisualNode, VisualEdge, Directed, u32, node::NodeShape>;
-    type Node = FNode<VisualNode, VisualEdge, Directed, u32, node::NodeShape>;
+    type Edge =
+        FEdge<VisualNode, VisualEdge, Directed, u32, node::AppNodeShape, AppEdgeShape<VisualEdge>>;
+    type Node = FNode<VisualNode, VisualEdge, Directed, u32, node::AppNodeShape>;
     fn edge_mut(edge: &mut Self::Edge) -> &mut EdgeRuntime {
         &mut edge.payload_mut().edge
     }
@@ -110,8 +118,10 @@ impl Conv for VisualConv {
     }
 }
 
-pub type TyGraph = ForceGraphType<VisualNode, VisualEdge, Directed, u32, NodeShape>;
-pub type TyGraphUI = Graph<VisualNode, VisualEdge, Directed, u32, NodeShape>;
+pub type TyGraph =
+    ForceGraphType<VisualNode, VisualEdge, Directed, u32, AppNodeShape, AppEdgeShape<VisualEdge>>;
+pub type TyGraphUI =
+    Graph<VisualNode, VisualEdge, Directed, u32, AppNodeShape, AppEdgeShape<VisualEdge>>;
 
 pub struct AppZK {
     g: Option<TyGraphUI>,
@@ -122,6 +132,12 @@ pub struct AppZK {
     reset: bool,
     root_nodes: BTreeSet<NI>,
     owned_nodes: BTreeSet<NI>,
+    editing: Option<Editor1>,
+}
+
+pub struct Editor1 {
+    ix: GraphElement,
+    json: Value,
 }
 
 impl AppZK {
@@ -130,10 +146,9 @@ impl AppZK {
         self.owned_nodes.clear();
     }
     pub fn compute(&mut self) -> Result<(), anyhow::Error> {
-        println!("compute");
         use smt::wot::*;
-
         if let Some(g) = self.g.as_mut() {
+            println!("compute");
             let gx = g.g_mut();
             let mut proving = ProofWeb::new(gx, VisualConv);
             proving.public.methods = Methods::Web {
@@ -143,6 +158,14 @@ impl AppZK {
                 Methods::Web { roots } => roots,
                 _ => unreachable!(),
             };
+            for (x, (n, p)) in proving.web.g.node_references() {
+                if n.payload().mark_root {
+                    roots.insert(x.index() as u32, 100);
+                }
+                if n.payload().mark_owned {
+                    proving.owned.insert(x.index() as u32, IdentityPub::Mock);
+                }
+            }
 
             construct(proving, MockVerify, &mut VisualGrapher);
         }
@@ -175,6 +198,7 @@ impl AppZK {
             reset: false,
             owned_nodes: Default::default(),
             root_nodes: Default::default(),
+            editing: None,
         }
     }
 }
@@ -196,6 +220,20 @@ pub fn rand_view() -> TyGraphUI {
     for n in islands {
         sg.add_edge(rt, n, Default::default());
     }
+    let root_num = 3;
+    let owned_num = 4;
+    let mut rng = rand::thread_rng();
+    let ni = rand::distributions::Uniform::new(0, sg.node_count());
+    for _ in 0..root_num {
+        let n: NodeIndex = NodeIndex::new(ni.sample(&mut rng));
+        sg[n].mark_root = true;
+        sg[n].node.score = 1000;
+    }
+    for _ in 0..owned_num {
+        let n: NodeIndex = NodeIndex::new(ni.sample(&mut rng));
+        sg[n].mark_owned = true;
+    }
+
     let g: TyGraphUI = new_from_raw(&sg, &mut |_n: &mut _| {}, &mut |_e: &mut _| {});
 
     println!("num {} {}", g.node_count(), g.edge_count());
@@ -203,13 +241,13 @@ pub fn rand_view() -> TyGraphUI {
 }
 use egui_graphs::{SettingsInteraction, SettingsNavigation, SettingsStyle};
 
-use crate::node::NodeShape;
+use crate::{edge::AppEdgeShape, node::AppNodeShape};
 
 impl App for AppZK {
     fn update(&mut self, ctx: &Context, f: &mut eframe::Frame) {
-        ctx.options_mut(|op| op.scroll_zoom_speed = 10.);
         egui::SidePanel::new(egui::panel::Side::Right, Id::new("controls")).show(ctx, |ui| {
             ui.add_space(20.);
+            ui.set_width(200.);
             if ui.selectable_label(self.pick_root, "pick root").clicked() {
                 self.pick_root = true;
                 self.pick_owned = false;
@@ -231,7 +269,32 @@ impl App for AppZK {
                 println!("eval {:?}", x);
             }
             if let Some(g) = &self.g {
+                if let Some(n) = &g.meta.hovered {
+                    match n {
+                        GraphElement::Node(n) => {
+                            let (nx, p) = g.node(NodeIndex::new(*n)).unwrap();
+                            let jsonified = serde_json::to_value(nx.payload()).unwrap();
+                            self.editing = Some(Editor1 {
+                                ix: GraphElement::Node(*n),
+                                json: jsonified,
+                            });
+                        }
+                        GraphElement::Path(p) => {
+                            let edge = g.edge(EdgeIndex::new(*p)).unwrap();
+                            let jsonified = serde_json::to_value(edge.payload()).unwrap();
+                            self.editing = Some(Editor1 {
+                                ix: GraphElement::Path(*p),
+                                json: jsonified,
+                            });
+                        }
+                    }
+                }
                 ui.label(format!("hovered {:?}", g.meta.hovered));
+            }
+            if let Some(editor) = &self.editing {
+                JsonTree::new("node_view", &editor.json)
+                    .default_expand(egui_json_tree::DefaultExpand::All)
+                    .show(ui);
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -261,7 +324,7 @@ impl App for AppZK {
                     VisualEdge,
                     Directed,
                     u32,
-                    NodeShape,
+                    AppNodeShape,
                     _,
                     LayoutState,
                     Layout,
@@ -360,4 +423,5 @@ fn gen_graph() -> StableGraph<VisualNode, VisualEdge> {
     sg
 }
 
+mod edge;
 mod node;

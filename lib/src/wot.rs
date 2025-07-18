@@ -23,19 +23,24 @@ use petgraph::visit::IntoEdgesDirected;
 use petgraph::visit::IntoNeighborsDirected;
 use petgraph::visit::NodeRef;
 
+use serde::Deserialize;
+use serde::Serialize;
 use sp1_zkvm::lib::{self, verify::verify_sp1_proof};
 
 /// Same as Node, but with some data hidden by ZKP
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct NodeProof {
     public: Attestation,
     proof: MultiProof,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 /// Only proofs conforming to the standard public value can be accepted
 /// Such a proof only commits once, with this struct.
-pub struct StandardPublicValue<NodeIx = MultiHash> {
+pub struct StandardPublicValue<NodeIx = MultiHash>
+where
+    NodeIx: Ord,
+{
     // Common parameters
     pub nodes: BTreeMap<NodeIx, IdentityPub>,
     pub attest: Vec<Attestation>,
@@ -44,14 +49,21 @@ pub struct StandardPublicValue<NodeIx = MultiHash> {
     pub output: Output,
 }
 
-pub enum Methods<NodeIx = MultiHash> {
+#[derive(Serialize, Deserialize)]
+pub enum Methods<NodeIx = MultiHash>
+where
+    NodeIx: Ord,
+{
     /// Simplest method, where the score is derived from weighted whitelists and blacklists
     Weighted { weight: BTreeMap<NodeIx, u32> },
     /// Web of trust
     Web { roots: BTreeMap<NodeIx, u32> },
 }
 
-impl<Ix> Default for Methods<Ix> {
+impl<Ix> Default for Methods<Ix>
+where
+    Ix: Ord,
+{
     fn default() -> Self {
         Self::Web {
             roots: Default::default(),
@@ -59,20 +71,20 @@ impl<Ix> Default for Methods<Ix> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub enum Output {
     #[default]
     Pending,
     Score(u32),
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct Attestation {
     owner: IdentityPub,
     weighted: BTreeMap<IdentityPub, u32>,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub enum IdentityPub {
     /// Classical way, representing an identity as a key pair
     Publickey([u8; 32]),
@@ -81,6 +93,7 @@ pub enum IdentityPub {
     Mock,
 }
 
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub enum MultiHash {
     Sha3_256([u8; 32]),
     /// For future use
@@ -88,38 +101,39 @@ pub enum MultiHash {
     Mock,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub enum MultiProof {
     Signature(Vec<u8>),
     Hash(HashOwnership),
     Mock,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub enum HashOwnership {
     ZKExternal { vk: [u32; 8], pv: [u8; 32] },
     ZK { pre_image: [u32; 8] },
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct OwnershipProofs {
     map: BTreeMap<IdentityPub, MultiProof>,
 }
 
 use petgraph::Graph;
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub score: u32,
     pub proof: Option<NodeProof>,
 }
 
 /// Computed weight as a fraction of total weight
+#[derive(Serialize, Deserialize)]
 pub struct Edge {
     fraction: u32,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Serialize, Deserialize)]
 pub struct EdgeRuntime {
     pub fraction: u32,
 }
@@ -251,7 +265,7 @@ impl<'b, N, E, C: Conv<Node = N, Edge = E>> ProofWeb<'b, N, E, C> {
 }
 
 pub struct WrappedGraph<'b, N, E, C: Conv<Node = N, Edge = E>> {
-    g: &'b mut StableGraph<N, E, Directed, GraphIx>,
+    pub g: &'b mut StableGraph<N, E, Directed, GraphIx>,
     pub conv: C,
 }
 
@@ -413,10 +427,11 @@ pub fn insert_max<N, E, C: Conv<Node = N, Edge = E>>(
         return;
     }
     if let Some(e) = max {
-        let (_src, target) = proving.edge_endpoints(e).unwrap();
-        map.map_node(proving, target, None);
+        let (src, target) = proving.edge_endpoints(e).unwrap();
+        assert_eq!(target, pointed);
+        map.map_node(proving, src, None);
         map.map_edge(proving, e, None);
-        insert_max::<N, E, C>(target, proving, map, conv);
+        insert_max::<N, E, C>(src, proving, map, conv);
     }
 }
 
