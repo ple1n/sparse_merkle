@@ -14,7 +14,7 @@ use egui::{Button, Context, Id, emath};
 use egui_graphs::{
     DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForce,
     events::Event,
-    graph::{DispalyForceGraphDefault, FEdge, FNode},
+    graph::{FEdge, FNode, ForceGraphType},
     new_from_raw, to_graph_custom,
 };
 use fdg::{
@@ -110,7 +110,7 @@ impl Conv for VisualConv {
     }
 }
 
-pub type TyGraph = DispalyForceGraphDefault<VisualNode, VisualEdge, Directed, u32>;
+pub type TyGraph = ForceGraphType<VisualNode, VisualEdge, Directed, u32, NodeShape>;
 pub type TyGraphUI = Graph<VisualNode, VisualEdge, Directed, u32, NodeShape>;
 
 pub struct AppZK {
@@ -132,45 +132,19 @@ impl AppZK {
     pub fn compute(&mut self) -> Result<(), anyhow::Error> {
         println!("compute");
         use smt::wot::*;
-        let mut rweb = RuntimeWeb::default();
+
         if let Some(g) = self.g.as_mut() {
             let gx = g.g_mut();
             let mut proving = ProofWeb::new(gx, VisualConv);
-            // proving.web = rweb;
-            // proving.public.methods = Methods::Web {
-            //     roots: Default::default(),
-            // };
-            // let roots = match &mut proving.public.methods {
-            //     Methods::Web { roots } => roots,
-            //     _ => unreachable!(),
-            // };
+            proving.public.methods = Methods::Web {
+                roots: Default::default(),
+            };
+            let roots = match &mut proving.public.methods {
+                Methods::Web { roots } => roots,
+                _ => unreachable!(),
+            };
 
-            // for (x, n) in proving.web.node_weights() {
-            //     if n.add.mark_owned {
-            //         proving.owned.insert(x, IdentityPub::Mock);
-            //     }
-            //     if n.add.mark_root {
-            //         roots.insert(x, 100);
-            //     }
-            // }
-            // let mut pruned = construct(proving, MockVerify)?;
-            // println!(
-            //     "pruned {} {}",
-            //     pruned.web.nodes_count(),
-            //     pruned.web.edges_count()
-            // );
-            // for (x, n) in pruned.web.node_weights() {
-            //     *self
-            //         .g
-            //         .as_mut()
-            //         .unwrap()
-            //         .node_mut(x.into())
-            //         .unwrap()
-            //         .0
-            //         .payload_mut() = n.clone();
-            // }
-            // let (nodes, edges) = pruned.web.as_nodes_and_edges_mut();
-            // for (ei, e) in edges {}
+            construct(proving, MockVerify, &mut VisualGrapher);
         }
         Ok(())
     }
