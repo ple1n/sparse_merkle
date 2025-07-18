@@ -12,26 +12,109 @@ use crossbeam::channel::{self, Receiver, Sender};
 use eframe::{App, CreationContext, NativeOptions, run_native};
 use egui::{Button, Context, Id, emath};
 use egui_graphs::{
-    DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForce, events::Event, new_from_raw,
-    to_graph_custom,
+    DefaultEdgeShape, DefaultGraphView, Graph, GraphView, LayoutForce,
+    events::Event,
+    graph::{DispalyForceGraphDefault, FEdge, FNode},
+    new_from_raw, to_graph_custom,
 };
 use fdg::{
     Force, ForceGraph,
     fruchterman_reingold::{FruchtermanReingold, FruchtermanReingoldConfiguration},
+    nalgebra::OPoint,
     simple::Center,
 };
 use petgraph::{
     Directed,
     algo::min_spanning_tree,
-    graph::NodeIndex,
+    graph::{EdgeIndex, NodeIndex},
     graphmap,
     stable_graph::StableGraph,
     visit::{EdgeRef, IntoEdgeReferences, IntoEdgesDirected, IntoNodeReferences},
 };
-use smt::wot::{self, EdgeRuntime, Node};
+use smt::{
+    smt::Proof,
+    wot::{self, Conv, EdgeRuntime, MapGraph, Node},
+};
+
+#[derive(Clone)]
+pub struct VisualNode {
+    node: Node,
+    mark_root: bool,
+    mark_owned: bool,
+    mapped: bool,
+}
+
+#[derive(Clone)]
+pub struct VisualEdge {
+    edge: EdgeRuntime,
+    mapped: bool,
+}
+
+impl Default for VisualEdge {
+    fn default() -> Self {
+        VisualEdge {
+            edge: EdgeRuntime { fraction: 0 },
+            mapped: false,
+        }
+    }
+}
+impl Default for VisualNode {
+    fn default() -> Self {
+        VisualNode {
+            node: Node {
+                score: 0,
+                proof: None,
+            },
+            mark_root: false,
+            mark_owned: false,
+            mapped: false,
+        }
+    }
+}
+
+pub struct VisualGrapher;
+
+impl MapGraph for VisualGrapher {
+    type IxE = EdgeIndex;
+    type IxN = NodeIndex;
+    type S = TyGraph;
+    fn map_node(&mut self, sg: &mut Self::S, node: Self::IxN, new: Option<Node>) -> bool {
+        let is = sg[node].0.payload_mut().mapped;
+        sg[node].0.payload_mut().mapped = true;
+        is
+    }
+    fn map_edge(&mut self, sg: &mut Self::S, edge: Self::IxE, new: Option<EdgeRuntime>) -> bool {
+        let is = sg[edge].payload_mut().mapped;
+        sg[edge].payload_mut().mapped = true;
+        is
+    }
+}
+
+#[derive(Default)]
+pub struct VisualConv;
+
+impl Conv for VisualConv {
+    type Edge = FEdge<VisualNode, VisualEdge, Directed, u32, node::NodeShape>;
+    type Node = FNode<VisualNode, VisualEdge, Directed, u32, node::NodeShape>;
+    fn edge_mut(edge: &mut Self::Edge) -> &mut EdgeRuntime {
+        &mut edge.payload_mut().edge
+    }
+    fn edge_ref(edge: &Self::Edge) -> &EdgeRuntime {
+        &edge.payload().edge
+    }
+    fn node_mut(node: &mut Self::Node) -> &mut Node {
+        &mut node.0.props.payload.node
+    }
+    fn node_ref(node: &Self::Node) -> &Node {
+        &node.0.props.payload.node
+    }
+}
+
+pub type TyGraph = DispalyForceGraphDefault<VisualNode, VisualEdge, Directed, u32>;
+pub type TyGraphUI = Graph<VisualNode, VisualEdge, Directed, u32, NodeShape>;
 
 pub struct AppZK {
-    g: Option<Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape>>,
+    g: Option<TyGraphUI>,
     pick_root: bool,
     pick_owned: bool,
     rx: Receiver<Event>,
@@ -49,45 +132,45 @@ impl AppZK {
     pub fn compute(&mut self) -> Result<(), anyhow::Error> {
         println!("compute");
         use smt::wot::*;
-        let mut rweb = RuntimeWeb::<VisualData>::default();
+        let mut rweb = RuntimeWeb::default();
         if let Some(g) = self.g.as_mut() {
-            let gx = g.g();
-            let mut proving = ProofWeb::default();
-            proving.web = rweb;
-            proving.public.methods = Methods::Web {
-                roots: Default::default(),
-            };
-            let roots = match &mut proving.public.methods {
-                Methods::Web { roots } => roots,
-                _ => unreachable!(),
-            };
+            let gx = g.g_mut();
+            let mut proving = ProofWeb::new(gx, VisualConv);
+            // proving.web = rweb;
+            // proving.public.methods = Methods::Web {
+            //     roots: Default::default(),
+            // };
+            // let roots = match &mut proving.public.methods {
+            //     Methods::Web { roots } => roots,
+            //     _ => unreachable!(),
+            // };
 
-            for (x, n) in proving.web.node_weights() {
-                if n.add.mark_owned {
-                    proving.owned.insert(x, IdentityPub::Mock);
-                }
-                if n.add.mark_root {
-                    roots.insert(x, 100);
-                }
-            }
-            let mut pruned = construct(proving, MockVerify)?;
-            println!(
-                "pruned {} {}",
-                pruned.web.nodes_count(),
-                pruned.web.edges_count()
-            );
-            for (x, n) in pruned.web.node_weights() {
-                *self
-                    .g
-                    .as_mut()
-                    .unwrap()
-                    .node_mut(x.into())
-                    .unwrap()
-                    .0
-                    .payload_mut() = n.clone();
-            }
-            let (nodes, edges) = pruned.web.as_nodes_and_edges_mut();
-            for (ei, e) in edges {}
+            // for (x, n) in proving.web.node_weights() {
+            //     if n.add.mark_owned {
+            //         proving.owned.insert(x, IdentityPub::Mock);
+            //     }
+            //     if n.add.mark_root {
+            //         roots.insert(x, 100);
+            //     }
+            // }
+            // let mut pruned = construct(proving, MockVerify)?;
+            // println!(
+            //     "pruned {} {}",
+            //     pruned.web.nodes_count(),
+            //     pruned.web.edges_count()
+            // );
+            // for (x, n) in pruned.web.node_weights() {
+            //     *self
+            //         .g
+            //         .as_mut()
+            //         .unwrap()
+            //         .node_mut(x.into())
+            //         .unwrap()
+            //         .0
+            //         .payload_mut() = n.clone();
+            // }
+            // let (nodes, edges) = pruned.web.as_nodes_and_edges_mut();
+            // for (ei, e) in edges {}
         }
         Ok(())
     }
@@ -122,8 +205,8 @@ impl AppZK {
     }
 }
 
-pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> {
-    let mut sg: StableGraph<Node<VisualData>, EdgeRuntime<VisualData>> = gen_graph();
+pub fn rand_view() -> TyGraphUI {
+    let mut sg: StableGraph<_, _> = gen_graph();
     println!("gen new graph {}", sg.node_count());
     let mut islands = BTreeSet::new();
     for (ni, no) in sg.node_references() {
@@ -135,37 +218,11 @@ pub fn rand_view() -> Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed,
             islands.insert(ni);
         }
     }
-    let rt = sg.add_node(Node {
-        score: 0,
-        proof: None,
-        add: VisualData {
-            virt: true,
-            ..Default::default()
-        },
-    });
+    let rt = sg.add_node(Default::default());
     for n in islands {
-        sg.add_edge(
-            rt,
-            n,
-            EdgeRuntime {
-                fraction: 0,
-                data: VisualData {
-                    virt: true,
-                    ..Default::default()
-                },
-            },
-        );
+        sg.add_edge(rt, n, Default::default());
     }
-    let g: Graph<Node<VisualData>, EdgeRuntime<VisualData>, Directed, u32, NodeShape> =
-        new_from_raw(
-            &sg,
-            &mut |n: &mut _| {
-                if n.payload().add.virt {
-                    n.props.hidden = true
-                }
-            },
-            &mut |e: &mut _| {},
-        );
+    let g: TyGraphUI = new_from_raw(&sg, &mut |_n: &mut _| {}, &mut |_e: &mut _| {});
 
     println!("num {} {}", g.node_count(), g.edge_count());
     g
@@ -226,8 +283,8 @@ impl App for AppZK {
                     self.reset = false;
                 }
                 let mut gv = GraphView::<
-                    Node<VisualData>,
-                    EdgeRuntime<VisualData>,
+                    VisualNode,
+                    VisualEdge,
                     Directed,
                     u32,
                     NodeShape,
@@ -260,11 +317,11 @@ impl App for AppZK {
                                 dbg!(&map);
                             };
                             if self.pick_root {
-                                let p = &mut n.payload_mut().add.mark_root;
+                                let p = &mut n.payload_mut().mark_root;
                                 mark(&mut self.root_nodes, p);
                             }
                             if self.pick_owned {
-                                let p = &mut n.payload_mut().add.mark_owned;
+                                let p = &mut n.payload_mut().mark_owned;
                                 mark(&mut self.owned_nodes, p);
                             }
 
@@ -291,8 +348,7 @@ fn main() {
     .unwrap();
 }
 
-fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
--> StableGraph<wot::Node<A>, EdgeRuntime<B>> {
+fn gen_graph() -> StableGraph<VisualNode, VisualEdge> {
     use graphalgs::generate::random_weighted_digraph;
     use rand::distributions::uniform::UniformSampler;
     use smt::wot::notzk::WeightSampler;
@@ -304,30 +360,27 @@ fn gen_graph<A: Default, B: Default + Clone + PartialOrd + Copy>()
     let g = random_weighted_digraph(
         node_num,
         nedge,
-        EdgeRuntime {
-            fraction: 1,
-            data: B::default(),
-        },
-        EdgeRuntime {
-            fraction: 100,
-            data: B::default(),
-        },
+        EdgeRuntime { fraction: 1 },
+        EdgeRuntime { fraction: 100 },
     )
     .unwrap();
-    let mut sg: StableGraph<wot::Node<A>, EdgeRuntime<B>> = StableGraph::new();
+    let mut sg: StableGraph<VisualNode, VisualEdge> = StableGraph::new();
 
     for _ix in 0..node_num {
-        sg.add_node(wot::Node {
-            score: 0,
-            proof: None,
-            add: A::default(),
-        });
+        sg.add_node(Default::default());
     }
 
     for ((n1, n2), e) in g {
         let n1 = (n1 as u32).into();
         let n2 = (n2 as u32).into();
-        sg.add_edge(n1, n2, e);
+        sg.add_edge(
+            n1,
+            n2,
+            VisualEdge {
+                edge: e,
+                ..Default::default()
+            },
+        );
     }
 
     sg

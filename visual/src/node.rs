@@ -7,7 +7,7 @@ use smt::wot;
 
 use egui_graphs::{DisplayNode, DrawContext, NodeProps};
 
-use crate::VisualData;
+use crate::{VisualData, VisualNode};
 
 /// This is the default node shape which is used to display nodes in the graph.
 ///
@@ -24,7 +24,6 @@ pub struct NodeShape {
 
     pub radius: f32,
     pub hidden: bool,
-    pub data: VisualData,
     pub props: NodeProps<NV>,
 }
 
@@ -38,17 +37,14 @@ impl From<NodeProps<NV>> for NodeShape {
             color: node_props.color(),
             hidden: node_props.hidden,
             radius: 5.0,
-            data: node_props.payload.add,
             props: node_props,
         }
     }
 }
 
-type NV = wot::Node<VisualData>;
+type NV = VisualNode;
 
-impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E, Ty, Ix>
-    for NodeShape
-{
+impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for NodeShape {
     fn is_inside(&self, pos: Pos2) -> bool {
         is_inside_circle(self.pos, self.radius, pos)
     }
@@ -78,11 +74,11 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
             style.fg_stroke.color
         };
 
-        if self.data.mark_root {
+        if self.props.payload.mark_root {
             color = color.blend(Color32::ORANGE.gamma_multiply(0.9))
         }
 
-        if self.data.mark_owned {
+        if self.props.payload.mark_owned {
             color = color.blend(Color32::LIGHT_GREEN.gamma_multiply(0.6))
         }
 
@@ -90,7 +86,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
             color = color.blend(Color32::DARK_RED.gamma_multiply(0.4));
         }
 
-        if state.payload.score == 0 {
+        if state.payload.node.score == 0 {
             color = color.gamma_multiply(0.4);
         }
 
@@ -147,7 +143,7 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<wot::Node<VisualData>, E
         self.label_text = state.label.to_string();
         self.color = state.color();
         self.hidden = state.hidden;
-        self.data = state.payload.add;
+        self.props.payload = state.payload.clone();
         self.props = state.clone();
     }
 }

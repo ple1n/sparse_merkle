@@ -2,6 +2,7 @@
 
 #![allow(clippy::large_enum_variant)]
 
+use std::collections::btree_map;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -17,6 +18,7 @@ use petgraph::algo::Measure;
 use petgraph::data::FromElements;
 use petgraph::graph;
 use petgraph::visit;
+use petgraph::visit::IntoEdgeReferences;
 use petgraph::visit::IntoEdgesDirected;
 use petgraph::visit::IntoNeighborsDirected;
 use petgraph::visit::NodeRef;
@@ -221,39 +223,45 @@ pub type GraphIx = petgraph::graph::DefaultIx;
 pub type RuntimeWeb = StableGraph<Node, EdgeRuntime, Directed, GraphIx>;
 
 /// Runtime state. Therefore indexed as much as possible.
-pub struct ProofWeb<'b, N, E>
-where
-    for<'a> &'a mut Node: From<&'a mut N>,
-    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
-    for<'a> &'a Node: From<&'a N>,
-    for<'a> &'a EdgeRuntime: From<&'a E>,
-{
-    pub web: WrappedGraph<'b, N, E>,
+pub struct ProofWeb<'b, N, E, C: Conv<Node = N, Edge = E>> {
+    pub web: WrappedGraph<'b, N, E, C>,
     pub owned: BTreeMap<GraphIx, IdentityPub>,
     pub proofs: OwnershipProofs,
     pub public: StandardPublicValue<GraphIx>,
 }
 
-pub struct WrappedGraph<'b, N, E>
-where
-    for<'a> &'a mut Node: From<&'a mut N>,
-    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
-    for<'a> &'a Node: From<&'a N>,
-    for<'a> &'a EdgeRuntime: From<&'a E>,
-{
+pub trait Conv: Default {
+    type Node;
+    type Edge;
+    fn node_ref(node: &Self::Node) -> &Node;
+    fn edge_ref(edge: &Self::Edge) -> &EdgeRuntime;
+    fn node_mut(node: &mut Self::Node) -> &mut Node;
+    fn edge_mut(edge: &mut Self::Edge) -> &mut EdgeRuntime;
+}
+
+impl<'b, N, E, C: Conv<Node = N, Edge = E>> ProofWeb<'b, N, E, C> {
+    pub fn new(g: &'b mut StableGraph<N, E, Directed, GraphIx>, conv: C) -> Self {
+        Self {
+            web: WrappedGraph { g, conv },
+            owned: Default::default(),
+            proofs: Default::default(),
+            public: Default::default(),
+        }
+    }
+}
+
+pub struct WrappedGraph<'b, N, E, C: Conv<Node = N, Edge = E>> {
     g: &'b mut StableGraph<N, E, Directed, GraphIx>,
+    pub conv: C,
 }
 
 use petgraph::prelude::*;
 
 // Accepts a partial graph
-pub fn compute<'b, N, E, V: NodeVerify>(proving: ProofWeb<'b, N, E>, verify: V)
-where
-    for<'a> &'a mut Node: From<&'a mut N>,
-    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
-    for<'a> &'a Node: From<&'a N>,
-    for<'a> &'a EdgeRuntime: From<&'a E>,
-{
+pub fn compute<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
+    proving: ProofWeb<'b, N, E, C>,
+    verify: V,
+) {
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
@@ -262,7 +270,7 @@ where
         Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(ix);
-                let n: &mut Node = (&mut proving.web.g[node] as &mut N).into();
+                let n: &mut Node = C::node_mut(&mut proving.web.g[node]);
                 n.score = w;
             }
             loop {
@@ -271,7 +279,7 @@ where
                         if !visited.insert(ix) {
                             continue;
                         }
-                        let node: &Node = (&proving.web.g[ix]).into();
+                        let node: &Node = C::node_ref(&proving.web.g[ix]);
                         let this_score = node.score;
                         verify.verify_node(node.proof.as_ref().unwrap());
                         let ixes: Vec<_> = proving
@@ -283,10 +291,10 @@ where
                         let div = ixes.len() as u32;
                         for (e, n) in ixes {
                             let add = this_score / div;
-                            let ex: &mut EdgeRuntime = (&mut proving.web.g[e] as &mut E).into();
+                            let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
                             ex.fraction = add;
 
-                            let nn: &mut Node = (&mut proving.web.g[n] as &mut N).into();
+                            let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
                             nn.score += add;
                             next.insert(n, ());
                         }
@@ -331,16 +339,11 @@ impl Add for PathWeight {
 }
 
 /// Traverses the full graph, and find relevant sub graph
-pub fn construct<'b, N, E, V: NodeVerify>(
-    mut proving: ProofWeb<'b, N, E>,
+pub fn construct<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
+    mut proving: ProofWeb<'b, N, E, C>,
     verify: V,
-    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex>,
-) where
-    for<'a> &'a mut Node: From<&'a mut N>,
-    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
-    for<'a> &'a Node: From<&'a N>,
-    for<'a> &'a EdgeRuntime: From<&'a E>,
-{
+    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex, S = StableGraph<N, E, Directed, GraphIx>>,
+) {
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
     let mut visited: BTreeSet<NodeIndex> = Default::default();
@@ -349,7 +352,7 @@ pub fn construct<'b, N, E, V: NodeVerify>(
         Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(*ix);
-                let n: &mut Node = (&mut proving.web.g[node] as &mut N).into();
+                let n: &mut Node = C::node_mut(&mut proving.web.g[node]);
                 n.score = *w;
             }
             loop {
@@ -358,7 +361,7 @@ pub fn construct<'b, N, E, V: NodeVerify>(
                         if !visited.insert(ix) {
                             continue;
                         }
-                        let node: &Node = (&proving.web.g[ix]).into();
+                        let node: &Node = C::node_ref(&proving.web.g[ix]);
                         verify.verify_node(node.proof.as_ref().unwrap());
 
                         let ixes: Vec<_> = proving
@@ -371,9 +374,9 @@ pub fn construct<'b, N, E, V: NodeVerify>(
                         let this_score = node.score;
                         for (e, n) in ixes {
                             let add = this_score / div;
-                            let ex: &mut EdgeRuntime = (&mut proving.web.g[e] as &mut E).into();
+                            let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
                             ex.fraction = add;
-                            let nn: &mut Node = (&mut proving.web.g[n] as &mut N).into();
+                            let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
                             nn.score += add;
                             next.insert(n, ());
                         }
@@ -389,44 +392,84 @@ pub fn construct<'b, N, E, V: NodeVerify>(
     }
 
     for (ix, key) in &proving.owned {
-        insert_max::<N, E>((*ix).into(), proving.web.g, map);
+        insert_max::<N, E, C>((*ix).into(), proving.web.g, map, &proving.web.conv);
     }
 }
 
-pub fn insert_max<N, E>(
+pub fn insert_max<N, E, C: Conv<Node = N, Edge = E>>(
     pointed: NodeIndex,
     proving: &mut StableGraph<N, E, Directed, GraphIx>,
-    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex>,
-) where
-    for<'a> &'a mut Node: From<&'a mut N>,
-    for<'a> &'a mut EdgeRuntime: From<&'a mut E>,
-    for<'a> &'a Node: From<&'a N>,
-    for<'a> &'a EdgeRuntime: From<&'a E>,
-{
+    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex, S = StableGraph<N, E, Directed, GraphIx>>,
+    conv: &C,
+) {
     let src = proving.edges_directed(pointed, Direction::Incoming);
-    let max = src.max_by_key(|k| {
-        let e: &EdgeRuntime = k.weight().into();
-        e.fraction
-    });
-    let node: &Node = (&proving[pointed] as &N).into();
-    if map.map_node(pointed, node) {
+    let max = src
+        .max_by_key(|k| {
+            let e: &EdgeRuntime = C::edge_ref(k.weight());
+            e.fraction
+        })
+        .map(|e| e.id());
+    if map.map_node(proving, pointed, None) {
         return;
     }
     if let Some(e) = max {
-        let node: &Node = (&proving[e.target()] as &N).into();
-        map.map_node(e.target(), node);
-        map.map_edge(e.id(), e.weight().into());
-        insert_max::<N, E>(e.target(), proving, map);
+        let (_src, target) = proving.edge_endpoints(e).unwrap();
+        map.map_node(proving, target, None);
+        map.map_edge(proving, e, None);
+        insert_max::<N, E, C>(target, proving, map, conv);
     }
 }
 
-pub struct GraphMapDefault;
+/// Generates a new graph
+pub struct GraphMapDefault<S> {
+    new: S,
+    v_nodes: BTreeMap<NodeIndex, NodeIndex>,
+    v_edges: BTreeMap<EdgeIndex, EdgeIndex>,
+}
 
-/// Represents a change to a graph
+/// Represents a change to a graph. ie. creating a new graph
 pub trait MapGraph {
     type IxN;
     type IxE;
+    type S;
     /// True, if the node exists
-    fn map_node(&mut self, node: Self::IxN, new: &Node) -> bool;
-    fn map_edge(&mut self, edge: Self::IxE, new: &EdgeRuntime) -> bool;
+    fn map_node(&mut self, sg: &mut Self::S, node: Self::IxN, new: Option<Node>) -> bool;
+    fn map_edge(&mut self, sg: &mut Self::S, edge: Self::IxE, new: Option<EdgeRuntime>) -> bool;
+}
+
+impl<N, E> MapGraph for GraphMapDefault<StableGraph<N, E, Directed, GraphIx>>
+where
+    Node: Into<N>,
+    EdgeRuntime: Into<E>,
+    N: Clone,
+    E: Clone,
+{
+    type S = StableGraph<N, E, Directed, GraphIx>;
+    type IxE = EdgeIndex;
+    type IxN = NodeIndex;
+    fn map_node(&mut self, sg: &mut Self::S, node: Self::IxN, new: Option<Node>) -> bool {
+        match self.v_nodes.entry(node) {
+            btree_map::Entry::Vacant(n) => {
+                let i = self
+                    .new
+                    .add_node(new.map_or_else(|| sg[node].clone(), |x| x.into()));
+                n.insert(i);
+                false
+            }
+            btree_map::Entry::Occupied(_) => true,
+        }
+    }
+    fn map_edge(&mut self, sg: &mut Self::S, edge: Self::IxE, new: Option<EdgeRuntime>) -> bool {
+        match self.v_edges.entry(edge) {
+            btree_map::Entry::Vacant(n) => {
+                let (a, b) = sg.edge_endpoints(edge).unwrap();
+                let i = self
+                    .new
+                    .add_edge(a, b, new.map_or_else(|| sg[edge].clone(), |x| x.into()));
+                n.insert(i);
+                false
+            }
+            btree_map::Entry::Occupied(_) => true,
+        }
+    }
 }
