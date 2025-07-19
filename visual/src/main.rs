@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smt::{
     smt::Proof,
-    wot::{self, Conv, EdgeRuntime, MapGraph, Node},
+    wot::{self, Conv, EdgeRuntime, Fr, MapGraph, Node},
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,7 +58,9 @@ pub struct VisualEdge {
 impl Default for VisualEdge {
     fn default() -> Self {
         VisualEdge {
-            edge: EdgeRuntime { fraction: 0 },
+            edge: EdgeRuntime {
+                fraction: Fr::default(),
+            },
             mapped: false,
         }
     }
@@ -67,7 +69,7 @@ impl Default for VisualNode {
     fn default() -> Self {
         VisualNode {
             node: Node {
-                score: 0,
+                score: Fr::default(),
                 proof: None,
             },
             mark_root: false,
@@ -160,14 +162,14 @@ impl AppZK {
             };
             for (x, (n, p)) in proving.web.g.node_references() {
                 if n.payload().mark_root {
-                    roots.insert(x.index() as u32, 100);
+                    roots.insert(x.index() as u32, n.payload().node.score.clone());
                 }
                 if n.payload().mark_owned {
                     proving.owned.insert(x.index() as u32, IdentityPub::Mock);
                 }
             }
 
-            construct(proving, MockVerify, &mut VisualGrapher);
+            construct(proving, &MockVerify, &mut VisualGrapher);
         }
         Ok(())
     }
@@ -227,7 +229,7 @@ pub fn rand_view() -> TyGraphUI {
     for _ in 0..root_num {
         let n: NodeIndex = NodeIndex::new(ni.sample(&mut rng));
         sg[n].mark_root = true;
-        sg[n].node.score = 1000;
+        sg[n].node.score = Fr::from(1000.);
     }
     for _ in 0..owned_num {
         let n: NodeIndex = NodeIndex::new(ni.sample(&mut rng));
@@ -397,8 +399,12 @@ fn gen_graph() -> StableGraph<VisualNode, VisualEdge> {
     let g = random_weighted_digraph(
         node_num,
         nedge,
-        EdgeRuntime { fraction: 1 },
-        EdgeRuntime { fraction: 100 },
+        EdgeRuntime {
+            fraction: Fr::from(1.),
+        },
+        EdgeRuntime {
+            fraction: Fr::from(100.),
+        },
     )
     .unwrap();
     let mut sg: StableGraph<VisualNode, VisualEdge> = StableGraph::new();

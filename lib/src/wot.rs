@@ -9,6 +9,11 @@ use std::collections::BTreeSet;
 use std::default;
 use std::ops::Add;
 
+use ark_std::Zero;
+use fraction::BigFraction;
+use fraction::Fraction;
+use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use ordermap::OrderMap;
 use ordermap::OrderSet;
 use petgraph::algo;
@@ -26,6 +31,8 @@ use petgraph::visit::NodeRef;
 use serde::Deserialize;
 use serde::Serialize;
 use sp1_zkvm::lib::{self, verify::verify_sp1_proof};
+
+pub type Fr = OrderedFloat<f32>;
 
 /// Same as Node, but with some data hidden by ZKP
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
@@ -57,7 +64,7 @@ where
     /// Simplest method, where the score is derived from weighted whitelists and blacklists
     Weighted { weight: BTreeMap<NodeIx, u32> },
     /// Web of trust
-    Web { roots: BTreeMap<NodeIx, u32> },
+    Web { roots: BTreeMap<NodeIx, Fr> },
 }
 
 impl<Ix> Default for Methods<Ix>
@@ -123,7 +130,7 @@ use petgraph::Graph;
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct Node {
-    pub score: u32,
+    pub score: Fr,
     pub proof: Option<NodeProof>,
 }
 
@@ -135,7 +142,7 @@ pub struct Edge {
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Serialize, Deserialize)]
 pub struct EdgeRuntime {
-    pub fraction: u32,
+    pub fraction: Fr,
 }
 
 #[cfg(feature = "notzk")]
@@ -196,15 +203,13 @@ pub mod notzk {
         }
 
         fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
+            let f: f32 = rng.sample(if self.include_high {
+                rand::distributions::Uniform::new_inclusive(*self.low.fraction, *self.high.fraction)
+            } else {
+                rand::distributions::Uniform::new(*self.low.fraction, *self.high.fraction)
+            });
             EdgeRuntime {
-                fraction: rng.sample(if self.include_high {
-                    rand::distributions::Uniform::new_inclusive(
-                        self.low.fraction,
-                        self.high.fraction,
-                    )
-                } else {
-                    rand::distributions::Uniform::new(self.low.fraction, self.high.fraction)
-                }),
+                fraction: Fr::from(f),
             }
         }
 
@@ -285,7 +290,6 @@ pub fn compute<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
             for (ix, w) in weight {
                 let node = NodeIndex::from(ix);
                 let n: &mut Node = C::node_mut(&mut proving.web.g[node]);
-                n.score = w;
             }
             loop {
                 if !this.is_empty() {
@@ -294,7 +298,7 @@ pub fn compute<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
                             continue;
                         }
                         let node: &Node = C::node_ref(&proving.web.g[ix]);
-                        let this_score = node.score;
+                        let this_score = &node.score;
                         verify.verify_node(node.proof.as_ref().unwrap());
                         let ixes: Vec<_> = proving
                             .web
@@ -302,16 +306,16 @@ pub fn compute<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
                             .edges_directed(ix, Direction::Outgoing)
                             .map(|e| (e.id(), e.target()))
                             .collect();
-                        let div = ixes.len() as u32;
-                        for (e, n) in ixes {
-                            let add = this_score / div;
-                            let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
-                            ex.fraction = add;
+                        // let div = ixes.len() as u32;
+                        // for (e, n) in ixes {
+                        //     let add = this_score / div;
+                        //     let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
+                        //     ex.fraction = add;
 
-                            let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
-                            nn.score += add;
-                            next.insert(n, ());
-                        }
+                        //     let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
+                        //     nn.score += add;
+                        //     next.insert(n, ());
+                        // }
                     }
                 } else {
                     break;
@@ -355,58 +359,62 @@ impl Add for PathWeight {
 /// Traverses the full graph, and find relevant sub graph
 pub fn construct<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
     mut proving: ProofWeb<'b, N, E, C>,
-    verify: V,
+    verify: &V,
     map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex, S = StableGraph<N, E, Directed, GraphIx>>,
 ) {
     let mut this: BTreeMap<NodeIndex, ()> = BTreeMap::new();
-    let mut next: BTreeMap<NodeIndex, ()> = BTreeMap::new();
-    let mut visited: BTreeSet<NodeIndex> = Default::default();
-
     match &mut proving.public.methods {
         Methods::Web { roots: weight } => {
             for (ix, w) in weight {
                 let node = NodeIndex::from(*ix);
                 let n: &mut Node = C::node_mut(&mut proving.web.g[node]);
-                n.score = *w;
+                this.insert(node, ());
             }
-            loop {
-                if !this.is_empty() {
-                    for (ix, _) in this {
-                        if !visited.insert(ix) {
-                            continue;
-                        }
-                        let node: &Node = C::node_ref(&proving.web.g[ix]);
-                        verify.verify_node(node.proof.as_ref().unwrap());
-
-                        let ixes: Vec<_> = proving
-                            .web
-                            .g
-                            .edges_directed(ix, Direction::Outgoing)
-                            .map(|e| (e.id(), e.target()))
-                            .collect();
-                        let div = ixes.len() as u32;
-                        let this_score = node.score;
-                        for (e, n) in ixes {
-                            let add = this_score / div;
-                            let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
-                            ex.fraction = add;
-                            let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
-                            nn.score += add;
-                            next.insert(n, ());
-                        }
-                    }
-                } else {
-                    break;
-                }
-                this = next;
-                next = Default::default();
+            for (n, _) in this {
+                recurse(&mut proving, verify, map, Default::default(), n);
             }
         }
         _ => unimplemented!(),
     }
 
-    for (ix, key) in &proving.owned {
-        insert_max::<N, E, C>((*ix).into(), proving.web.g, map, &proving.web.conv);
+    // for (ix, key) in &proving.owned {
+    //     insert_max::<N, E, C>((*ix).into(), proving.web.g, map, &proving.web.conv);
+    // }
+}
+
+pub fn recurse<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
+    proving: &mut ProofWeb<'b, N, E, C>,
+    verify: &V,
+    map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex, S = StableGraph<N, E, Directed, GraphIx>>,
+    mut path: Vec<NodeIndex>,
+    cursor: NodeIndex,
+) {
+    println!("{:?} -> {:?}", &path, &cursor);
+    if let Some(_) = path.iter().find_position(|x| **x == cursor) {
+        return;
+    }
+    let node = C::node_ref(&proving.web.g[cursor]);
+    path.push(cursor);
+    let ixes: Vec<_> = proving
+        .web
+        .g
+        .edges_directed(cursor, Direction::Outgoing)
+        .map(|e| (e.id(), e.target()))
+        .collect();
+    let this_score = node.score.clone();
+    let mut total_frac = Fr::zero();
+    for (e, n) in ixes.clone() {
+        let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
+        total_frac += ex.fraction;
+    }
+    for (e, n) in ixes {
+        let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
+        let add = this_score.clone() * (Fr::from(ex.fraction) / total_frac.clone());
+        let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
+        nn.score += add;
+        map.map_edge(proving.web.g, e, None);
+        map.map_node(proving.web.g, n, None);
+        recurse(proving, verify, map, path.clone(), n);
     }
 }
 
@@ -448,6 +456,7 @@ pub trait MapGraph {
     type IxE;
     type S;
     /// True, if the node exists
+    /// Data is still written for repeated node writes
     fn map_node(&mut self, sg: &mut Self::S, node: Self::IxN, new: Option<Node>) -> bool;
     fn map_edge(&mut self, sg: &mut Self::S, edge: Self::IxE, new: Option<EdgeRuntime>) -> bool;
 }
