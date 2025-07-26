@@ -17,6 +17,7 @@ use ordered_float::OrderedFloat;
 use ordermap::OrderMap;
 use ordermap::OrderSet;
 use petgraph::algo;
+use petgraph::algo::bellman_ford;
 use petgraph::algo::k_shortest_path;
 use petgraph::algo::min_spanning_tree;
 use petgraph::algo::Measure;
@@ -370,9 +371,6 @@ pub fn construct<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
                 let n: &mut Node = C::node_mut(&mut proving.web.g[node]);
                 this.insert(node, ());
             }
-            for (n, _) in this {
-                recurse(&mut proving, verify, map, Default::default(), n);
-            }
         }
         _ => unimplemented!(),
     }
@@ -383,16 +381,14 @@ pub fn construct<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
 }
 
 pub fn recurse<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
-    proving: &mut ProofWeb<'b, N, E, C>,
+    proving: &mut ProofWeb<'_, N, E, C>,
     verify: &V,
     map: &mut impl MapGraph<IxN = NodeIndex, IxE = EdgeIndex, S = StableGraph<N, E, Directed, GraphIx>>,
     mut path: Vec<NodeIndex>,
     cursor: NodeIndex,
 ) {
     println!("{:?} -> {:?}", &path, &cursor);
-    if let Some(_) = path.iter().find_position(|x| **x == cursor) {
-        return;
-    }
+
     let node = C::node_ref(&proving.web.g[cursor]);
     path.push(cursor);
     let ixes: Vec<_> = proving
@@ -409,12 +405,25 @@ pub fn recurse<'b, N, E, V: NodeVerify, C: Conv<Node = N, Edge = E>>(
     }
     for (e, n) in ixes {
         let ex: &mut EdgeRuntime = C::edge_mut(&mut proving.web.g[e]);
-        let add = this_score.clone() * (Fr::from(ex.fraction) / total_frac.clone());
-        let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
-        nn.score += add;
+        let add = this_score.clone() * (ex.fraction / total_frac);
+        println!(
+            "{:?} += {} / {} = {} of {}",
+            n,
+            ex.fraction,
+            total_frac,
+            (ex.fraction / total_frac),
+            this_score
+        );
         map.map_edge(proving.web.g, e, None);
         map.map_node(proving.web.g, n, None);
-        recurse(proving, verify, map, path.clone(), n);
+
+        if let Some(_) = path.iter().find_position(|x| **x == n) {
+            continue;
+        } else {
+            let nn: &mut Node = C::node_mut(&mut proving.web.g[n]);
+            nn.score += add;
+            recurse(proving, verify, map, path.clone(), n);
+        }
     }
 }
 

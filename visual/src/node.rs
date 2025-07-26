@@ -109,9 +109,9 @@ impl<E: Clone, Ty: EdgeType, Ix: IndexType> DisplayNode<NV, E, Ty, Ix> for AppNo
 
         let mut label_visible = ctx.style.labels_always || self.selected || self.dragged;
 
-        if state.payload.mapped {
+        if state.payload.mapped || state.payload.mark_root {
             label_visible = true;
-            self.label_text = format!("{}", state.payload.node.score);
+            self.label_text = format!("{:.2}", state.payload.node.score);
         }
 
         if !label_visible {

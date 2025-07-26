@@ -14,6 +14,10 @@ Various components can interact to generate the final proof.
 
 ## Web of trust
 
-This is the most robust model of reputation as illustrated in my notes 
+There is an unfinished work of web-of-trust for which I wanted to use fuzzy logic. 
 
-Possible integration, to visualize https://github.com/blitzar-tech/egui_graphs
+![fuzzy](image.png)
+
+There is a component that implements interactive graph ui in pure Rust. 
+
+Fuzzy logic might be more robust and interpretable, compared to eigenvector thing in linear algebra and neuronal methods. 
