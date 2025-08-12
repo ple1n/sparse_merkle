@@ -116,8 +116,10 @@ fn main() -> anyhow::Result<()> {
         // dbg!(&comm);
 
         // Verify the proof.
+        let verify_start = Instant::now();
         client.verify(&proof, &vk).expect("failed to verify proof");
-        println!("Successfully verified proof!");
+        let verify_duration = verify_start.elapsed();
+        println!("Proof verification took: {:?}", verify_duration);
     }
 
     Ok(())
