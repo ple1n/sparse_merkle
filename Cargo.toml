@@ -3,8 +3,6 @@ members = [
     "lib",
     "program",
     "script",
-    "visual",
-    "visual/egui_graphs",
     "contracts/ping",
 ]
 resolver = "2"
@@ -18,5 +16,6 @@ rand = "0.8"                                                      # graphalgs
 freenet-stdlib = { version = "0.1.11" }
 freenet-ping-types = { path = "types", default-features = false }
 chrono = { version = "0.4", default-features = false }
+
 
 # rand crate sucks. so much renaming from 0.8 to 0.9
