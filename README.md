@@ -16,8 +16,8 @@ Various components can interact to generate the final proof.
 
 There is an unfinished work of web-of-trust for which I wanted to use fuzzy logic. 
 
-![fuzzy](image.png)
+I considered it a more complicated problem than I imagined. 
 
-There is a component that implements interactive graph ui in pure Rust. 
+The central concern is that, many solutions provide _marginal gains_. Transitive trust in reality decays quasi exponentially, which renders web-of-trust a useless tool ultimately.
 
-Fuzzy logic might be more robust and interpretable, compared to eigenvector thing in linear algebra and neuronal methods. 
+see branch `visual` for more. 
